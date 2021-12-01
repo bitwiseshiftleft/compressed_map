@@ -47,7 +47,7 @@ extern "C" {
  *****************************************************************/
 
 /** A full-size salt value */
-typedef uint64_t lfr_uniform_salt_t;
+typedef uint64_t lfr_salt_t;
 
 /** Block indices */
 typedef uint32_t lfr_uniform_block_index_t;
@@ -59,7 +59,7 @@ typedef struct { lfr_uniform_block_index_t blocks[2]; } _lfr_uniform_row_indices
 typedef struct {
     size_t used, capacity;
     size_t blocks;
-    lfr_uniform_salt_t salt;
+    lfr_salt_t salt;
     uint8_t value_bits;
     _lfr_uniform_row_indices_s *row_meta;
     uint8_t *data;
@@ -73,7 +73,7 @@ int lfr_uniform_builder_init (
     lfr_uniform_builder_t map,
     size_t capacity,
     size_t value_bits,
-    lfr_uniform_salt_t salt
+    lfr_salt_t salt
 );
 
 /** Clear any relations in the map. */
@@ -115,7 +115,7 @@ size_t lfr_uniform_builder_size(const lfr_uniform_builder_t builder);
 /** A compiled uniform map. */ 
 typedef struct {
     size_t blocks;
-    lfr_uniform_salt_t salt;
+    lfr_salt_t salt;
     uint8_t value_bits;
     uint8_t data_is_mine; // vector memory was allocated here, and should be deallocated with lfr_uniform_map_destroy
     uint8_t _salt_hint; // used when the salt is derived

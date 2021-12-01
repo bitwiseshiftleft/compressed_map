@@ -130,7 +130,7 @@ int main(int argc, const char **argv) {
         if (rows == 0) goto norows;
 
         size_t row_deficit = LFR_BLOCKSIZE*8*blocks - rows;
-        lfr_uniform_salt_t salt;
+        lfr_salt_t salt;
         uint8_t salt_as_bytes[sizeof(salt)];
         randomize(salt_as_bytes, seed, blocks<<32 ^ 0xFFFFFFFF, sizeof(salt_as_bytes));
         salt = le2ui(salt_as_bytes, sizeof(salt_as_bytes));

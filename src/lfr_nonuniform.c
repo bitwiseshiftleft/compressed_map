@@ -414,7 +414,7 @@ int API_VIS lfr_nonuniform_build (
         /* Create the builder */
         lfr_uniform_builder_destroy(builder);
 
-        lfr_uniform_salt_t salt;
+        lfr_salt_t salt;
         if (phase == 0) {
             /* (re)randomize salt for the whole operation */
             if (( ret = getentropy(&salt, sizeof(salt)) )) goto done;

@@ -48,7 +48,7 @@ int API_VIS lfr_uniform_builder_init (
     lfr_uniform_builder_t matrix,
     size_t capacity,
     size_t value_bits,
-    lfr_uniform_salt_t salt
+    lfr_salt_t salt
 ) {
     matrix->capacity = capacity;
     matrix->blocks = _lfr_uniform_provision_columns(capacity) / 8 / LFR_BLOCKSIZE;
@@ -86,7 +86,7 @@ typedef struct {
     tile_matrix_systematic_t systematic; // from parents
     size_t cols;
     size_t rows;
-    lfr_uniform_salt_t salt;
+    lfr_salt_t salt;
     int error;
 #if LFR_THREADED
     pthread_cond_t cv;
@@ -765,7 +765,7 @@ static inline __attribute__((always_inline)) void _lfr_uniform_hash (
     size_t offset_bits,
     const uint8_t *key,
     size_t key_length,
-    lfr_uniform_salt_t salt,
+    lfr_salt_t salt,
     size_t nblocks
 ) {
     size_t offset_bytes = BYTES(offset_bits);
