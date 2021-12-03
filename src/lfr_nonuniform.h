@@ -27,20 +27,14 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-typedef uint32_t lfr_nonuniform_response_t; // TODO: wider / narrower??
-typedef uint64_t lfr_locator_t; // TODO: wider / narrower??
 
-/** A nonuniform relation, used to build the maps */
-typedef struct {
-    const uint8_t *query;
-    size_t query_length;
-    lfr_nonuniform_response_t response;
-} lfr_nonuniform_relation_t;
+/** Locator interval value */
+typedef uint64_t lfr_locator_t;
 
 /** An interval structure used in the map to store a response. */
 typedef struct {
     lfr_locator_t lower_bound;
-    lfr_nonuniform_response_t     response;
+    lfr_response_t     response;
 } lfr_nonuniform_intervals_s, lfr_nonuniform_intervals_t[1];
 
 /** A nonuniform map structure, ready to be queried */
@@ -75,7 +69,7 @@ typedef struct {
  */
 int lfr_nonuniform_build (
     lfr_nonuniform_map_t map,
-    const lfr_nonuniform_relation_t *relns,
+    const lfr_relation_t *relns,
     size_t nrelns,
     int dedup_direction
 );
@@ -84,7 +78,7 @@ int lfr_nonuniform_build (
 void lfr_nonuniform_map_destroy(lfr_nonuniform_map_t map);
     
 /** Query a nonuniform map, with a key that's `keybytes` bytes long. */
-lfr_nonuniform_response_t lfr_nonuniform_query (
+lfr_response_t lfr_nonuniform_query (
     const lfr_nonuniform_map_t map,
     const uint8_t *key,
     size_t keybytes

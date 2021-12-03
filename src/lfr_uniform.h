@@ -49,11 +49,15 @@ extern "C" {
 /** A full-size salt value */
 typedef uint64_t lfr_salt_t;
 
-/** Block indices */
-typedef uint32_t lfr_uniform_block_index_t;
+/** Response to a query */
+typedef uint64_t lfr_response_t;
 
-/** Pairs of block indices **/
-typedef struct { lfr_uniform_block_index_t blocks[2]; } _lfr_uniform_row_indices_s;
+/** A key->value relation, used to build the maps */
+typedef struct {
+    const uint8_t *query; // TODO: rename?
+    size_t query_length;
+    lfr_response_t response;
+} lfr_relation_t;
 
 /** A builder to store the state of a uniform map before compiling it. */
 typedef struct {
@@ -61,8 +65,7 @@ typedef struct {
     size_t blocks;
     lfr_salt_t salt;
     uint8_t value_bits;
-    _lfr_uniform_row_indices_s *row_meta;
-    uint8_t *data;
+    lfr_relation_t *relations;
 } lfr_uniform_builder_s, lfr_uniform_builder_t[1];
 
 

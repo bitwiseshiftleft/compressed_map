@@ -21,18 +21,82 @@ typedef uint64_t lfr_uniform_block_t;
 #error "Need LFR_BLOCKSIZE in [1,2,4,8]"
 #endif
 
-
 extern const unsigned int LFR_META_SAMPLE_BYTES;
 
-// Internal: sample the block positions for a matrix
-extern _lfr_uniform_row_indices_s _lfr_uniform_sample_block_positions (
+
+/*************************************************
+ * Start of code specific to frayed ribbon shape *
+ *************************************************/
+
+/** Block indices */
+typedef uint32_t lfr_uniform_block_index_t;
+
+#ifndef LFR_OVERPROVISION
+#define LFR_OVERPROVISION 1024
+#endif
+
+static const size_t EXTRA_ROWS = 8;
+size_t API_VIS _lfr_uniform_provision_columns(size_t rows) {
+    size_t cols = rows + EXTRA_ROWS;
+#if LFR_OVERPROVISION
+    cols += cols/LFR_OVERPROVISION;
+#endif
+    cols += (-cols) % (8*LFR_BLOCKSIZE);
+    if (cols <= 8*LFR_BLOCKSIZE) cols = 16*LFR_BLOCKSIZE;
+    return cols;
+}
+
+size_t API_VIS _lfr_uniform_provision_max_rows(size_t cols) {
+    size_t cols0 = cols;
+    (void)cols0;
+#if LFR_OVERPROVISION
+    cols -= cols / (LFR_OVERPROVISION+1);
+#endif
+    if (cols <= EXTRA_ROWS) return 0;
+    if (_lfr_uniform_provision_columns(cols-EXTRA_ROWS) > cols0) cols--;
+    assert(_lfr_uniform_provision_columns(cols-EXTRA_ROWS) <= cols0);
+    return cols - EXTRA_ROWS;
+}
+
+/** The main sampling function: given a seed, sample block positions */
+static inline void _lfr_uniform_sample_block_positions (
+    lfr_uniform_block_index_t out[2],
     size_t nblocks,
-    const uint8_t *sample_bytes // size is LFR_META_SAMPLE_BYTES
-);
+    uint32_t stride_seed32,
+    uint32_t a_seed32
+) {
+    /* Parse the seed into uints */
+    uint64_t stride_seed = stride_seed32;
+    uint64_t a_seed      = a_seed32;
+    __uint128_t nblocks_huge = nblocks;
+
+    // calculate log(nblocks)<<48 in a smooth way
+    uint64_t k = high_bit(nblocks);
+    uint64_t smoothlog = (k<<48) + (nblocks<<(48-k)) - (1ull<<48);
+    uint64_t leading_coefficient = (12ull<<8)/LFR_BLOCKSIZE; // experimentally determined
+    uint64_t num = smoothlog * leading_coefficient; 
+
+#if LFR_OVERPROVISION
+    stride_seed |= (1ull<<33) / LFR_OVERPROVISION; // | instead of + because it can't overflow
+#endif
+    uint64_t den = ((stride_seed * stride_seed) * nblocks_huge) >> 32;
+#if (!LFR_OVERPROVISION) || (LFR_OVERPROVISION > 1ull<<16)
+    den++; // to prevent it from being 0
+#endif
+    uint64_t b_seed = (num / den + a_seed) & 0xFFFFFFFF; // den can't be 0 because stride_seed is adjusted
+
+    uint64_t a = (a_seed * nblocks_huge)>>32, b = (b_seed * nblocks_huge)>>32;
+    if (a==b && ++b >= nblocks) b=0;
+    out[0] = a;
+    out[1] = b;
+}
+
+/***********************************************
+ * End of code specific to frayed ribbon shape *
+ ***********************************************/
 
 void API_VIS lfr_uniform_builder_destroy(lfr_uniform_builder_t matrix) {
-    free(matrix->row_meta);
-    free(matrix->data);
+    free(matrix->relations);
     memset(matrix,0,sizeof(*matrix));
 }
 
@@ -40,37 +104,58 @@ void API_VIS lfr_uniform_builder_reset(lfr_uniform_builder_t matrix) {
     matrix->used = 0;
 }
 
-static inline size_t lfr_uniform_stride(const lfr_uniform_builder_t matrix) {
-    return 2*LFR_BLOCKSIZE + BYTES(matrix->value_bits);
-}
-
 int API_VIS lfr_uniform_builder_init (
-    lfr_uniform_builder_t matrix,
+    lfr_uniform_builder_t builder,
     size_t capacity,
     size_t value_bits,
     lfr_salt_t salt
 ) {
-    matrix->capacity = capacity;
-    matrix->blocks = _lfr_uniform_provision_columns(capacity) / 8 / LFR_BLOCKSIZE;
-    matrix->value_bits = value_bits;
-    matrix->salt = salt;
-    matrix->used = 0;
-    
-    size_t stride = lfr_uniform_stride(matrix);
-    matrix->row_meta = malloc(capacity * sizeof(*matrix->row_meta));
-    matrix->data = calloc(capacity, stride);
-        
-    if (matrix->row_meta == NULL || matrix->data == NULL) {
-        lfr_uniform_builder_destroy(matrix);
+    builder->capacity = capacity;
+    builder->blocks = _lfr_uniform_provision_columns(capacity) / 8 / LFR_BLOCKSIZE;
+    builder->value_bits = value_bits;
+    builder->salt = salt;
+    builder->used = 0;
+
+    builder->relations = calloc(capacity, sizeof(*builder->relations));    
+    if (builder->relations == NULL) {
+        lfr_uniform_builder_destroy(builder);
         return -ENOMEM;
     }
     
     return 0;
 }
 
-static uint8_t *lfr_uniform_row(const lfr_uniform_builder_t matrix, size_t row) {
-    if (row > matrix->used) return NULL;
-    return &matrix->data[lfr_uniform_stride(matrix)*row];
+typedef struct {
+    lfr_uniform_block_index_t block_positions[2];
+    uint8_t keyout[2*LFR_BLOCKSIZE];
+    uint64_t augmented;
+} _lfr_hash_result_t;
+
+static inline __attribute__((always_inline))
+_lfr_hash_result_t _lfr_uniform_hash (
+    const uint8_t *key,
+    size_t key_length,
+    lfr_salt_t salt,
+    size_t nblocks
+) {
+    _lfr_hash_result_t result;
+    size_t s = sizeof(result.keyout);
+    s += (-s)%8;
+    uint8_t hash[s];
+    
+    hash_result_t data = murmur3_x64_128_extended_seed(key, key_length, salt);
+    _lfr_uniform_sample_block_positions(result.block_positions,nblocks,(uint32_t)data.high64,data.high64>>32);
+    result.augmented = data.low64;
+
+    // TODO: can optimize this further eg by not cycling through ui2le
+    for (unsigned i=0; i<s/8; i++) {
+        data.high64 += data.low64;
+        data.low64  ^= rotl64(data.high64, 39);
+        ui2le(&hash[i*8],  8, data.low64);
+    }
+    memcpy(result.keyout,hash,sizeof(result.keyout));
+
+    return result;
 }
 
 /* A structure for tracking when a given half-row will meet its other half */
@@ -164,17 +249,22 @@ static uint32_t mark_as_mine(group_t *group, uint32_t my_mark) {
 /* Load the data into matrices for the group solver */
 static int lfr_uniform_build_setup (
     group_t **pgroups,
-    const lfr_uniform_builder_t matrix
+    const lfr_uniform_builder_t builder
 ) {
     int ret=0;
-    size_t log_blocks = high_bit(matrix->blocks-1);
+    size_t log_blocks = high_bit(builder->blocks-1);
     size_t ngroups = 1ull << (2+log_blocks);
     group_t *groups = calloc(ngroups, sizeof(*groups));
     
     /* Count number of elements in each block. */
-    for (size_t i=0; i<matrix->used; i++) {
-        size_t a = 1+2*matrix->row_meta[i].blocks[0];
-        size_t b = 1+2*matrix->row_meta[i].blocks[1];
+    for (size_t i=0; i<builder->used; i++) {
+        _lfr_hash_result_t hash = _lfr_uniform_hash (
+            builder->relations[i].query,
+            builder->relations[i].query_length,
+            builder->salt, builder->blocks
+        );
+        size_t a = 1+2*hash.block_positions[0];
+        size_t b = 1+2*hash.block_positions[1];
         groups[a].rows++;
         groups[b].rows++;
     }
@@ -191,10 +281,10 @@ static int lfr_uniform_build_setup (
 #endif
 
     /* Create matrices */
-    for (size_t i=0; i<matrix->blocks; i++) {
+    for (size_t i=0; i<builder->blocks; i++) {
         group_t *g = &groups[2*i+1];
         g->cols = LFR_BLOCKSIZE*8;
-        ret = tile_matrix_init(&g->data, g->rows, LFR_BLOCKSIZE*8, matrix->value_bits);
+        ret = tile_matrix_init(&g->data, g->rows, LFR_BLOCKSIZE*8, builder->value_bits);
         if (ret) { goto fail; }
         g->row_resolution = calloc(g->rows, sizeof(*g->row_resolution));
         if (g->row_resolution == NULL) { goto fail; }
@@ -515,7 +605,8 @@ static void initialize_row (
     group_t *left,
     group_t *right,
     group_t *resolution,
-    const uint8_t *row_data,
+    const uint8_t *keydata,
+    const uint8_t *augdata,
     int merge_step
 ) {
 #if LFR_THREADED
@@ -527,11 +618,11 @@ static void initialize_row (
         size_t row_res   = resolution->rows++;
 
         // PERF: this step is pretty slow
-        tile_matrix_set_row(&left->data,  row_left,  row_data, NULL);
+        tile_matrix_set_row(&left->data,  row_left,  keydata, NULL);
         left->row_resolution[row_left].merge_step = merge_step;
         left->row_resolution[row_left].row = row_res;
 
-        tile_matrix_set_row(&right->data, row_right, &row_data[LFR_BLOCKSIZE], &row_data[2*LFR_BLOCKSIZE]);
+        tile_matrix_set_row(&right->data, row_right, &keydata[LFR_BLOCKSIZE], augdata);
         right->row_resolution[row_right].merge_step = merge_step;
         right->row_resolution[row_right].row = row_res;
 #if LFR_THREADED
@@ -543,6 +634,7 @@ static void initialize_row (
 
 static void *lfr_uniform_build_thread (void *args_void) {
     lfr_uniform_build_args_t *args = (lfr_uniform_build_args_t *)args_void;
+    const lfr_uniform_builder_s *builder = args->matrix;
     group_t *groups = args->groups;
     size_t ngroups = args->ngroups;
     
@@ -564,14 +656,34 @@ static void *lfr_uniform_build_thread (void *args_void) {
     size_t start = args->matrix->used*threadid / nthreads;
     size_t end = args->matrix->used*(threadid+1) / nthreads;
     for (size_t i=start; i<end; i++) {
-        const uint8_t *row_data = lfr_uniform_row(args->matrix, i);
-        lfr_uniform_block_index_t block_left  = 2 * args->matrix->row_meta[i].blocks[0] + 1;
-        lfr_uniform_block_index_t block_right = 2 * args->matrix->row_meta[i].blocks[1] + 1;
+        _lfr_hash_result_t hash = _lfr_uniform_hash(
+            builder->relations[i].query,
+            builder->relations[i].query_length,
+            builder->salt,
+            builder->blocks
+        );
+        hash.augmented ^= builder->relations[i].response;
+        lfr_uniform_block_index_t block_left  = 2 * hash.block_positions[0] + 1;
+        lfr_uniform_block_index_t block_right = 2 * hash.block_positions[1] + 1;
+
+        if (block_left > block_right) {
+            lfr_uniform_block_index_t tmp = block_left;
+            block_left = block_right;
+            block_right = tmp;
+            // TODO simplify?
+            uint8_t tmpb[LFR_BLOCKSIZE];
+            memcpy(tmpb,hash.keyout,LFR_BLOCKSIZE);
+            memcpy(hash.keyout,&hash.keyout[LFR_BLOCKSIZE],LFR_BLOCKSIZE);
+            memcpy(&hash.keyout[LFR_BLOCKSIZE],tmpb,LFR_BLOCKSIZE);
+        }
+
 
         uint32_t resolution = resolution_block(block_left, block_right);
         uint32_t merge_step = __builtin_ctzll(resolution);
+        uint8_t augmented_b[sizeof(hash.augmented)];
+        ui2le(augmented_b, sizeof(augmented_b), hash.augmented);
 
-        initialize_row(&groups[block_left], &groups[block_right], &groups[resolution], row_data, merge_step);
+        initialize_row(&groups[block_left], &groups[block_right], &groups[resolution], hash.keyout, augmented_b, merge_step);
     }
 
     // synchronize
@@ -710,7 +822,7 @@ int API_VIS lfr_uniform_build_threaded (lfr_uniform_map_t output, const lfr_unif
     // Launch the solve threads
     int i;
     for (i=1; i<nthreads; i++) {
-        ret = pthread_init(&threads[i], NULL, lfr_uniform_build_thread, &args);
+        ret = pthread_create(&threads[i], NULL, lfr_uniform_build_thread, &args);
         if (ret) break;
     }
 #endif
@@ -758,70 +870,17 @@ done:
     return ret;
 }
 
-static inline __attribute__((always_inline)) void _lfr_uniform_hash (
-    _lfr_uniform_row_indices_s *meta,
-    uint8_t *keyout,
-    uint8_t *affine_offset,
-    size_t offset_bits,
-    const uint8_t *key,
-    size_t key_length,
-    lfr_salt_t salt,
-    size_t nblocks
-) {
-    size_t offset_bytes = BYTES(offset_bits);
-    size_t s = LFR_META_SAMPLE_BYTES + 2*LFR_BLOCKSIZE + offset_bytes;
-    s += (-s)%16;
-    uint8_t hash[s];
-    
-    hash_result_t data = murmur3_x64_128_extended_seed(key, key_length, salt);
-    ui2le(&hash[0], 8, data.low64);
-    ui2le(&hash[8], 8, data.high64);
-    *meta = _lfr_uniform_sample_block_positions(nblocks,hash);
-
-    for (unsigned i=1; i<s/16; i++) {
-        salt = fmix64(salt);
-        hash_result_t data = murmur3_x64_128_extended_seed(key, key_length, salt);
-        ui2le(&hash[i*16],  8, data.low64);
-        ui2le(&hash[i*16+8],8, data.high64);
-    }
-    memcpy(keyout,&hash[LFR_META_SAMPLE_BYTES],2*LFR_BLOCKSIZE);
-    memcpy(affine_offset,&hash[LFR_META_SAMPLE_BYTES+2*LFR_BLOCKSIZE],offset_bytes);
-    if (offset_bits%8) {
-        affine_offset[offset_bytes-1] &= (1<<(offset_bits%8))-1;
-    }
-}
-
 int API_VIS lfr_uniform_insert (
-    lfr_uniform_builder_t matrix,
+    lfr_uniform_builder_t builder,
     const uint8_t *key,
     size_t keybytes,
     uint64_t value
 ) {
-    if (matrix->used >= matrix->capacity) return -EINVAL;
-    size_t row = matrix->used++;
-    size_t stride = lfr_uniform_stride(matrix);
-    uint8_t *augdata = &matrix->data[stride*row+2*LFR_BLOCKSIZE];
-    uint8_t *keydata = &matrix->data[stride*row];
-    _lfr_uniform_hash (
-        &matrix->row_meta[row],
-        keydata,
-        augdata,
-        matrix->value_bits,
-        key, keybytes, matrix->salt, matrix->blocks
-    );
-    if (matrix->row_meta[row].blocks[0] > matrix->row_meta[row].blocks[1]) {
-        // swap
-        lfr_uniform_block_index_t tmp = matrix->row_meta[row].blocks[0];
-        matrix->row_meta[row].blocks[0] = matrix->row_meta[row].blocks[1];
-        matrix->row_meta[row].blocks[1] = tmp;
-        uint8_t tmpkey[LFR_BLOCKSIZE];
-        memcpy(tmpkey, keydata, LFR_BLOCKSIZE);
-        memcpy(keydata, &keydata[LFR_BLOCKSIZE], LFR_BLOCKSIZE);
-        memcpy(&keydata[LFR_BLOCKSIZE], tmpkey, LFR_BLOCKSIZE);
-    }
-    for (size_t i=0; i<BYTES(matrix->value_bits); i++) {
-        augdata[i] ^= value>>(8*i);
-    }
+    if (builder->used >= builder->capacity) return -EINVAL; // TODO: resize??
+    size_t row = builder->used++;
+    builder->relations[row].query = key;
+    builder->relations[row].query_length = keybytes;
+    builder->relations[row].response = value;
     return 0;
 }
 
@@ -834,28 +893,27 @@ uint64_t API_VIS lfr_uniform_query (
     const uint8_t *key,
     size_t keybytes
 ) {
-    uint64_t ret;
-    uint8_t value[sizeof(ret)];
     size_t value_bits = map->value_bits;
-    _lfr_uniform_row_indices_s meta;
-    lfr_uniform_block_t key_blk[2];
     
-    // PERF: so the perf of this sucks  compared to hashing externally.
-    // Why?  For two reasons: One, there's a lot of branching on keybytes in _lfr_uniform_hash.
-    // Two, if you hash all the keys first (unrealistic!) then the CPU can probably prefetch
-    // the memory, since the address is just sitting there.  Here the hash exceeds `the OOO window
-    _lfr_uniform_hash(&meta, (uint8_t*)key_blk, value, 8*sizeof(value), key, keybytes, map->salt, map->blocks);
+    _lfr_hash_result_t hash = _lfr_uniform_hash(key, keybytes, map->salt, map->blocks);
+    lfr_uniform_block_t key_blk[2];
+    memcpy(key_blk, hash.keyout, sizeof(key_blk)); // TODO: endian swap here?
+    uint64_t ret = hash.augmented;
+    uint64_t mask;
+    if (value_bits == 8*sizeof(ret)) {
+        mask = -1ull;
+    } else {
+        mask = (1ull<<value_bits) - 1;
+    }
 
-    ret = le2ui(value,sizeof(value)) & ((1ull << value_bits)-1);
     const unaligned_block_t *vectors_blk = (const unaligned_block_t *) map->data;
-    const unaligned_block_t *blkptr0 = &vectors_blk[value_bits*meta.blocks[0]];
-    const unaligned_block_t *blkptr1 = &vectors_blk[value_bits*meta.blocks[1]];
+    const unaligned_block_t *blkptr0 = &vectors_blk[value_bits*hash.block_positions[0]];
+    const unaligned_block_t *blkptr1 = &vectors_blk[value_bits*hash.block_positions[1]];
 
     #pragma clang loop vectorize(disable) // small trip count, not worth it
     for (size_t obit=0; obit<value_bits; obit++) {
         lfr_uniform_block_t dot = (blkptr0[obit].x & key_blk[0]) ^ (blkptr1[obit].x & key_blk[1]);
         ret ^= (uint64_t)parity(dot) << obit;
     }
-
-    return ret;
+    return ret & mask;
 }

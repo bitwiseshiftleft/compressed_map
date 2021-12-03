@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
 
     uint8_t *inputs;
      
-    lfr_nonuniform_relation_t *relns = malloc(total * sizeof(*relns));
+    lfr_relation_t *relns = malloc(total * sizeof(*relns));
     
     unsigned long long neach_remaining[nitems];
     for (unsigned i=0; i<nitems; i++) { neach_remaining[i] = neach[i]; }
@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
     printf("Sketch created; sanity checking...\n");
     start = now();
     for (size_t i=0; i<total; i++) {
-        lfr_nonuniform_response_t answer = lfr_nonuniform_query(map,relns[i].query,relns[i].query_length);
+        lfr_response_t answer = lfr_nonuniform_query(map,relns[i].query,relns[i].query_length);
         if (answer != relns[i].response) {
             printf("Bug: query %lld answer should be %d but query gave %d\n",
                 (unsigned long long)i, (int)relns[i].response, (int)answer);

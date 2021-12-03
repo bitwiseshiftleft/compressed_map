@@ -43,10 +43,6 @@ void usage(const char *fail, const char *me, int exitcode) {
     exit(exitcode);
 }
 
-static inline size_t min(size_t a, size_t b) {
-    return (a<b) ? a : b;
-}
-
 int main(int argc, const char **argv) {
     long long blocks_min=2, blocks_max=-1, blocks_step=10, augmented=8, ntrials=100;
     uint64_t seed = 2;
@@ -101,10 +97,8 @@ int main(int argc, const char **argv) {
     
     size_t keylen = 8;
 
-    const size_t ARENA_SIZE = 1<<20;
-    unsigned arena_max = min(rows_max, ARENA_SIZE);
-    uint8_t *keys    = malloc(arena_max*keylen);
-    uint64_t *values = calloc(arena_max, sizeof(*values));
+    uint8_t  *keys   = malloc(rows_max*keylen);
+    uint64_t *values = calloc(rows_max, sizeof(*values));
     if (keys == NULL || values == NULL) {
         printf("Can't allocate %lld key value pairs\n", (long long)rows_max);
         return 1;
@@ -142,18 +136,14 @@ int main(int argc, const char **argv) {
     
         double start, tot_construct=0, tot_rand=0, tot_query=0, tot_sample=0;
         size_t passes=0;
-        uint64_t dist=0;
         for (unsigned t=0; t<ntrials; t++) {
             start = now();
 
             lfr_uniform_builder_reset(matrix);
-            for (int j=0; j*ARENA_SIZE < rows; j++) {
-                size_t rows_todo = min(ARENA_SIZE, rows-j*ARENA_SIZE);
-                randomize(keys, seed,  blocks<<32 ^ t<<20 ^ j<<1,    rows_todo*keylen);
-                randomize((uint8_t*)values,seed,blocks<<32 ^ t<<20 ^ j<<1 ^ 1,rows_todo*sizeof(*values));
-                for (unsigned i=0; i<rows_todo; i++) {
-                    lfr_uniform_insert(matrix,&keys[keylen*i],keylen,values[i]);
-                }
+            randomize(keys, seed, blocks<<32 ^ t<<1,    rows*keylen);
+            randomize((uint8_t*)values,seed,blocks<<32 ^ t<<1 ^ 1,rows*sizeof(*values));
+            for (unsigned i=0; i<rows; i++) {
+                lfr_uniform_insert(matrix,&keys[keylen*i],keylen,values[i]);
             }
             record(&start, &tot_sample);
 
@@ -166,49 +156,36 @@ int main(int argc, const char **argv) {
         
             uint64_t mask = (augmented==64) ? -(uint64_t)1 : ((uint64_t)1 << augmented)-1;
             int allpass = 1;
-            for (int j=0; j*ARENA_SIZE < rows; j++) {
-                size_t rows_todo = min(ARENA_SIZE, rows-j*ARENA_SIZE);
-                randomize(keys, seed,  blocks<<32 ^ t<<20 ^ j<<1, rows_todo*keylen);
-                randomize((uint8_t*)values, seed, blocks<<32 ^ t<<20 ^ j<<1 ^ 1, rows_todo*sizeof(*values));
-                record(&start, &tot_rand);
-                for (unsigned i=0; i<rows_todo; i++) {
-                    uint64_t ret = lfr_uniform_query(map, &keys[i*keylen], keylen);
-                    if (ret != (values[i] & mask)) {
-                        if (verbose) printf("  Fail in row %lld: should be 0x%llx, actually 0x%llx\n",
-                            (long long)(i+j*ARENA_SIZE), (long long)(values[i] & mask), (long long)ret
-                        );
-                        allpass = 0;
-                    }
+            for (unsigned i=0; i<rows; i++) {
+                uint64_t ret = lfr_uniform_query(map, &keys[i*keylen], keylen);
+                if (ret != (values[i] & mask)) {
+                    if (verbose) printf("  Fail in row %lld: should be 0x%llx, actually 0x%llx\n",
+                        (long long)i, (long long)(values[i] & mask), (long long)ret
+                    );
+                    allpass = 0;
                 }
-                record(&start,&tot_query);
             }
+            record(&start,&tot_query);
             if (allpass && verbose) printf("  Pass!\n");
             passes += allpass;
             record(&start, &tot_query);
-
-            for (size_t r=0; r<rows; r++) {
-                uint64_t a_dist = matrix->row_meta[r].blocks[1] - matrix->row_meta[r].blocks[0];
-                if (a_dist > 128) a_dist = 128;
-                dist += a_dist;
-            }
             lfr_uniform_map_destroy(map);
         }
 
-        double us_per_query = INFINITY, sps = INFINITY, us_per_build = INFINITY, ns_per_sample = INFINITY, distrate = INFINITY;
+        double us_per_query = INFINITY, sps = INFINITY, us_per_build = INFINITY, ns_per_sample = INFINITY;
         if (passes) {
             us_per_query = tot_query * 1e6 / passes / rows;
             ns_per_sample = tot_sample * 1e9 / passes / rows;
             us_per_build = tot_construct * 1e6 / passes / rows;
-            distrate = 1.0 * dist / passes / rows;
 	        successive_fails = 0;
         } else {
   	        successive_fails ++;
 	    }
         if (tot_construct > 0) sps = passes / tot_construct;
-        printf("Size %6d*%d*8 - %d x +%d pass rate = %4d / %4d = %5.1f%%, rand/trial=%0.5f s, time/trial=%0.5f s, sample/row=%0.5f ns, avgdist=%0.3f, build/row=%0.5f us, query/row=%0.5f us,  SPS=%0.3f\n",
+        printf("Size %6d*%d*8 - %d x +%d pass rate = %4d / %4d = %5.1f%%, rand/trial=%0.5f s, time/trial=%0.5f s, sample/row=%0.5f ns, build/row=%0.5f us, query/row=%0.5f us,  SPS=%0.3f\n",
             (int)blocks, (int)LFR_BLOCKSIZE, (int)row_deficit, (int)augmented, (int)passes,
             (int)ntrials, 100.0*passes/ntrials,
-            tot_rand/ntrials, tot_construct/ntrials, ns_per_sample, distrate, us_per_build, us_per_query,
+            tot_rand/ntrials, tot_construct/ntrials, ns_per_sample, us_per_build, us_per_query,
             sps);
         fflush(stdout);
         

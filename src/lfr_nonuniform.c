@@ -54,7 +54,7 @@ static lfr_locator_t lfr_nonuniform_summarize_plan (
 typedef struct {
     size_t count;                   /** How many times the value appears in the dict */
     lfr_locator_t width;            /** The width of the locator interval: value to be optimized */
-    lfr_nonuniform_response_t resp; /** The response / dictionary value itself */
+    lfr_response_t resp; /** The response / dictionary value itself */
 } formulation_item_t;
 
 /** Sort by interval width */
@@ -231,7 +231,7 @@ static size_t get_nconstr_target (
 }
 
 /** Binary search for item in map */
-static lfr_nonuniform_response_t bsearch_bound (
+static lfr_response_t bsearch_bound (
     unsigned nitems,
     const lfr_nonuniform_intervals_t *items,
     lfr_locator_t loc
@@ -292,7 +292,7 @@ static inline int constrained_this_phase (
 /* Create a lfr_nonuniform. */
 int API_VIS lfr_nonuniform_build (
     lfr_nonuniform_map_t out,
-    const lfr_nonuniform_relation_t *relns,
+    const lfr_relation_t *relns,
     size_t nrelns,
     int yes_overrides_no
 ) { 
@@ -316,7 +316,7 @@ int API_VIS lfr_nonuniform_build (
     // TODO: support nitems = 0 or 1, or non-dense encodings (using a hash table)
     unsigned MAX_NITEMS = 1<<16, nitems=2;
     for (size_t i=0; i<nrelns; i++) {
-        lfr_nonuniform_response_t resp = relns[i].response;
+        lfr_response_t resp = relns[i].response;
         if (resp >= MAX_NITEMS) return -1;
         else if (resp+1 > nitems) nitems = resp+1;
     }
@@ -326,7 +326,7 @@ int API_VIS lfr_nonuniform_build (
 
     /* Count the items */
     for (size_t i=0; i<nrelns; i++) {
-        lfr_nonuniform_response_t resp = relns[i].response;
+        lfr_response_t resp = relns[i].response;
         assert(resp <= nitems);
         item_counts[resp]++;
     }
@@ -385,7 +385,7 @@ int API_VIS lfr_nonuniform_build (
         /* Count the number of constrained rows */
         bitset_clear_all(relevant, nrelns);
         for (size_t i=0; i<nrelns; i++) {
-            lfr_nonuniform_response_t resp = relns[i].response;
+            lfr_response_t resp = relns[i].response;
             lfr_locator_t
                 lowx = out->response_map[resp]->lower_bound-1,
                 high = out->response_map[(resp+1) % nitems]->lower_bound-1,
@@ -428,7 +428,7 @@ int API_VIS lfr_nonuniform_build (
         /* Build the uniform map using constrained items */
         for (size_t i=0; i<nrelns; i++) {
             if (!bitset_test_bit(relevant, i)) continue; // it's not constrained this phase
-            lfr_nonuniform_response_t resp = relns[i].response;
+            lfr_response_t resp = relns[i].response;
         
             lfr_locator_t
                 lowx = out->response_map[resp]->lower_bound-1,
@@ -498,7 +498,7 @@ void API_VIS lfr_nonuniform_map_destroy(lfr_nonuniform_map_t map) {
     memset(map,0,sizeof(*map));
 }
 
-lfr_nonuniform_response_t API_VIS lfr_nonuniform_query (
+lfr_response_t API_VIS lfr_nonuniform_query (
     const lfr_nonuniform_map_t map,
     const uint8_t *key,
     size_t keybytes
@@ -526,13 +526,13 @@ lfr_nonuniform_response_t API_VIS lfr_nonuniform_query (
         plan -= least;
         known_mask |= (plan - least) &~ plan;
         
-        lfr_nonuniform_response_t lower = bsearch_bound(map->nresponses,map->response_map,loc);
-        lfr_nonuniform_response_t upper = bsearch_bound(map->nresponses,map->response_map,loc |~ known_mask);
+        lfr_response_t lower = bsearch_bound(map->nresponses,map->response_map,loc);
+        lfr_response_t upper = bsearch_bound(map->nresponses,map->response_map,loc |~ known_mask);
         if (upper == lower) {
             return upper;
         }
     };
     
     assert(0 && "bug or map is corrupt: lfr_nonuniform_query should have narrowed down a response");
-    return -(lfr_nonuniform_response_t)1;
+    return -(lfr_response_t)1;
 }

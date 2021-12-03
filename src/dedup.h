@@ -30,7 +30,7 @@
 int remove_duplicates (
     bitset_t relevant,
     size_t *n_out,
-    const lfr_nonuniform_relation_t *rel,
+    const lfr_relation_t *rel,
     size_t nrel,
     int yes_overrides_no
 );

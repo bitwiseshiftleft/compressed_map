@@ -12,9 +12,9 @@
 
 /** Compare two lfr_nonuniform_relations, with the given ordering of responses */
 static int cmp_relation(const void *avoid, const void *bvoid, int yes_overrides_no) {
-    const lfr_nonuniform_relation_t
-        *a = *(const lfr_nonuniform_relation_t *const*)avoid,
-        *b = *(const lfr_nonuniform_relation_t *const*)bvoid;
+    const lfr_relation_t
+        *a = *(const lfr_relation_t *const*)avoid,
+        *b = *(const lfr_relation_t *const*)bvoid;
     
     /* Sort by query length */
     if (a->query_length > b->query_length) return 1;
@@ -66,7 +66,7 @@ static inline __attribute__((always_inline)) void bloom_hash (
  */
 static bitset_t bloom_unique (
     const bitset_t relevant,
-    const lfr_nonuniform_relation_t *rel,
+    const lfr_relation_t *rel,
     size_t nrel
 ) {
     #define NHASHES 4
@@ -165,7 +165,7 @@ static bitset_t bloom_unique (
 int remove_duplicates (
     bitset_t relevant,
     size_t *n_out_p,
-    const lfr_nonuniform_relation_t *rel,
+    const lfr_relation_t *rel,
     size_t nrel,
     int yes_overrides_no
 ) {
@@ -182,7 +182,7 @@ int remove_duplicates (
     }
     
     size_t ndups = bitset_popcount(potential_dups, nrel);
-    const lfr_nonuniform_relation_t **idxs = malloc(sizeof(*idxs)*ndups);
+    const lfr_relation_t **idxs = malloc(sizeof(*idxs)*ndups);
     if (idxs == NULL) {
         free(potential_dups);
         return -ENOMEM;
@@ -202,7 +202,7 @@ int remove_duplicates (
     
     size_t n_out = 0;
     
-    const lfr_nonuniform_relation_t *prev = NULL;
+    const lfr_relation_t *prev = NULL;
     
     for (size_t i=0; i<ndups; i++) {
         if (prev && !memcmp(prev->query, idxs[i]->query, prev->query_length)) {
