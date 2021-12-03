@@ -68,7 +68,6 @@ typedef struct {
     lfr_relation_t *relations;
 } lfr_uniform_builder_s, lfr_uniform_builder_t[1];
 
-
 /** Initialize a map of the given capacity.  The size of the map when
  * built depends on its capacity, not how many rows are actually added.
  */
@@ -104,12 +103,6 @@ int lfr_uniform_insert (
     size_t keybytes,
     uint64_t value
 );
-
-/** Return the number of bytes required to store data section of the map once
- * it is built.
- */
-size_t lfr_uniform_builder_size(const lfr_uniform_builder_t builder);
-
 
 /*****************************************************************
  *                     Compiled uniform maps                     *

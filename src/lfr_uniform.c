@@ -147,7 +147,7 @@ _lfr_hash_result_t _lfr_uniform_hash (
     _lfr_uniform_sample_block_positions(result.block_positions,nblocks,(uint32_t)data.high64,data.high64>>32);
     result.augmented = data.low64;
 
-    // TODO: can optimize this further eg by not cycling through ui2le
+    // PERF: can we optimize this further eg by not cycling through ui2le?
     for (unsigned i=0; i<s/8; i++) {
         data.high64 += data.low64;
         data.low64  ^= rotl64(data.high64, 39);
@@ -670,7 +670,7 @@ static void *lfr_uniform_build_thread (void *args_void) {
             lfr_uniform_block_index_t tmp = block_left;
             block_left = block_right;
             block_right = tmp;
-            // TODO simplify?
+
             uint8_t tmpb[LFR_BLOCKSIZE];
             memcpy(tmpb,hash.keyout,LFR_BLOCKSIZE);
             memcpy(hash.keyout,&hash.keyout[LFR_BLOCKSIZE],LFR_BLOCKSIZE);
@@ -775,10 +775,6 @@ void API_VIS lfr_uniform_map_destroy(lfr_uniform_map_t doomed) {
 
 int API_VIS lfr_uniform_build (lfr_uniform_map_t output, const lfr_uniform_builder_t builder) {
     return lfr_uniform_build_threaded(output,builder,0);
-}
-
-size_t API_VIS lfr_uniform_builder_size(const lfr_uniform_builder_t builder) {
-    return builder->blocks * LFR_BLOCKSIZE * builder->value_bits;
 }
 
 size_t API_VIS lfr_uniform_map_size(const lfr_uniform_map_t map) {
@@ -897,7 +893,7 @@ uint64_t API_VIS lfr_uniform_query (
     
     _lfr_hash_result_t hash = _lfr_uniform_hash(key, keybytes, map->salt, map->blocks);
     lfr_uniform_block_t key_blk[2];
-    memcpy(key_blk, hash.keyout, sizeof(key_blk)); // TODO: endian swap here?
+    memcpy(key_blk, hash.keyout, sizeof(key_blk));
     uint64_t ret = hash.augmented;
     uint64_t mask;
     if (value_bits == 8*sizeof(ret)) {
