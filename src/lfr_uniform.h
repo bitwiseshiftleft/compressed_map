@@ -46,7 +46,7 @@ extern "C" {
  *                     Uniform map builders                      *
  *****************************************************************/
 
-/** A full-size salt value */
+/** A salt value, since the hashes we use are salted. */
 typedef uint64_t lfr_salt_t;
 
 /** Response to a query */
@@ -62,15 +62,39 @@ typedef struct {
 /** A builder to store the state of a uniform map before compiling it. */
 typedef struct {
     size_t used, capacity;
+    size_t data_used, data_capacity;
+    int copy_data;
     lfr_relation_t *relations;
+    uint8_t *data;
 } lfr_builder_s, lfr_builder_t[1];
 
-/** Initialize a map of the given capacity.  The size of the map when
- * built depends on its capacity, not how many rows are actually added.
+/**
+ * Initialize a map-builder, which may be used for either uniform or
+ * non-uniform maps.  The builder stores key->value mappings, and has
+ * an initial capacity of relations_capacity relations with a total
+ * amount of data equal to data_capacity.
+ *
+ * If copy_data is nonzero, then lfr_builder_insert will copy all data
+ * into a byte buffer stored in the builder.  Otherwise, data_capacity
+ * may (and should) be 0.  In this case, the builder will not copy
+ * or store the query's keys; they must be held externally until
+ * building the map is complete.
+ *
+ * @param builder The builder to initialize.
+ * @param relations_capacity The number of relations to allocate space for.
+ * It can be increased later.
+ * @param copy_data If nonzero, allocate a buffer to copy the query data.
+ * @param data_capacity If copy_data is nonzero, the initial size of the
+ * buffer to allocate.  It can be increased later.  If copy_data is zero,
+ * this is ignored.
+ * @return 0 on success.
+ * @return -ENOMEM if the requested data cannot be allocated.
  */
 int lfr_builder_init (
-    lfr_builder_t map,
-    size_t capacity
+    lfr_builder_t builder,
+    size_t relations_capacity,
+    int copy_data,
+    size_t data_capacity
 );
 
 /** Clear any relations in the map. */
@@ -90,13 +114,14 @@ void lfr_builder_destroy(lfr_builder_t builder);
  * @param keybytes Length of the key data in bytes.
  * @param value The value to associate to the key.
  * @return 0 on success.
- * @return -EINVAL if the map is already at capacity.
+ * @return -ENOMEM if the map is over the allocated capacity,
+ * and the size cannot be increased.
  */
 int lfr_builder_insert (
     lfr_builder_t builder,
     const uint8_t *key,
     size_t keybytes,
-    uint64_t value
+    lfr_response_t value
 );
 
 /*****************************************************************
@@ -143,7 +168,7 @@ size_t lfr_uniform_map_size(const lfr_uniform_map_t map);
 /** Query a uniform map.  If the key was used when building
  * the map, then the same value will be returned.
  */
-uint64_t lfr_uniform_query (
+lfr_response_t lfr_uniform_query (
     const lfr_uniform_map_t map,
     const uint8_t *key,
     size_t keybytes

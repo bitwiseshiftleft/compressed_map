@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
     }
 
     lfr_builder_t builder;
-    ret = lfr_builder_init(builder,total);
+    ret = lfr_builder_init(builder,total,0,0);
     if (ret) {
         printf("Can't initialize builder: %s\n", strerror(ret));
         return ret;

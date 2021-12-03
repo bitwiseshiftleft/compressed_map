@@ -128,7 +128,7 @@ int main(int argc, const char **argv) {
         uint8_t salt_as_bytes[sizeof(salt)];
         randomize(salt_as_bytes, seed, blocks<<32 ^ 0xFFFFFFFF, sizeof(salt_as_bytes));
         salt = le2ui(salt_as_bytes, sizeof(salt_as_bytes));
-        if (( ret=lfr_builder_init(matrix, rows) )) {
+        if (( ret=lfr_builder_init(matrix, rows,0,0) )) {
             fprintf(stderr, "Init  error: %s\n", strerror(-ret));
             return ret;
         }

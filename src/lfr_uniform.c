@@ -95,24 +95,35 @@ static inline void _lfr_uniform_sample_block_positions (
  * End of code specific to frayed ribbon shape *
  ***********************************************/
 
-void API_VIS lfr_builder_destroy(lfr_builder_t matrix) {
-    free(matrix->relations);
-    memset(matrix,0,sizeof(*matrix));
+void API_VIS lfr_builder_destroy(lfr_builder_t builder) {
+    free(builder->relations);
+    free(builder->data);
+    memset(builder,0,sizeof(*builder));
 }
 
-void API_VIS lfr_builder_reset(lfr_builder_t matrix) {
-    matrix->used = 0;
+void API_VIS lfr_builder_reset(lfr_builder_t builder) {
+    builder->used = 0;
+    builder->data_used = 0;
 }
 
 int API_VIS lfr_builder_init (
     lfr_builder_t builder,
-    size_t capacity
+    size_t capacity,
+    int copy_data,
+    size_t data_capacity
 ) {
     builder->capacity = capacity;
     builder->used = 0;
+    builder->data_used = 0;
+    builder->copy_data = copy_data = !!copy_data;
 
-    builder->relations = calloc(capacity, sizeof(*builder->relations));    
-    if (builder->relations == NULL) {
+    builder->relations = calloc(capacity, sizeof(*builder->relations));   
+    if (copy_data) {
+        builder->data = malloc(data_capacity); 
+    } else {
+        builder->data = NULL;
+    }
+    if (builder->relations == NULL || (copy_data && builder->data == NULL)) {
         lfr_builder_destroy(builder);
         return -ENOMEM;
     }
@@ -123,7 +134,7 @@ int API_VIS lfr_builder_init (
 typedef struct {
     lfr_uniform_block_index_t block_positions[2];
     uint8_t keyout[2*LFR_BLOCKSIZE];
-    uint64_t augmented;
+    lfr_response_t augmented;
 } _lfr_hash_result_t;
 
 static inline __attribute__((always_inline))
@@ -889,7 +900,39 @@ int API_VIS lfr_builder_insert (
     size_t keybytes,
     uint64_t value
 ) {
-    if (builder->used >= builder->capacity) return -EINVAL; // TODO: resize??
+    const size_t CAPACITY_STEP = 1024, DATA_CAPACITY_STEP = 1<<16;
+    if (builder->used >= builder->capacity) {
+        size_t new_capacity = 2*builder->capacity + CAPACITY_STEP;
+        lfr_relation_t *new = realloc(builder->relations, new_capacity * sizeof(*new));
+        if (new == NULL) return -ENOMEM;
+        builder->relations = new;
+        builder->capacity = new_capacity;
+    }
+
+    if (builder->copy_data) {
+        if (keybytes + builder->data_used < keybytes) return -ENOMEM; // overflow
+
+
+        if (keybytes + builder->data_used > builder->data_capacity) {
+            // Reallocate
+            size_t new_capacity = 2*builder->data_capacity + keybytes + DATA_CAPACITY_STEP;
+            if (new_capacity < keybytes + builder->data_used) return -ENOMEM; // overflow
+            uint8_t *new = realloc(builder->data, new_capacity);
+            if (new == NULL) return -ENOMEM;
+            // patch up the pointers
+            for (size_t i=0; i<builder->used; i++) {
+                builder->relations[i].query = new + (builder->relations[i].query - builder->data);
+            }
+            builder->data = new;
+            builder->data_capacity = new_capacity;
+        }
+
+        assert(keybytes + builder->data_used <= builder->data_capacity);
+        memcpy(&builder->data[builder->data_used], key, keybytes);
+        key = &builder->data[builder->data_used];
+        builder->data_used += keybytes;
+    }
+
     size_t row = builder->used++;
     builder->relations[row].query = key;
     builder->relations[row].query_length = keybytes;
@@ -911,7 +954,7 @@ uint64_t API_VIS lfr_uniform_query (
     _lfr_hash_result_t hash = _lfr_uniform_hash(key, keybytes, map->salt, map->blocks);
     lfr_uniform_block_t key_blk[2];
     memcpy(key_blk, hash.keyout, sizeof(key_blk));
-    uint64_t ret = hash.augmented;
+    lfr_response_t ret = hash.augmented;
     uint64_t mask;
     if (value_bits == 8*sizeof(ret)) {
         mask = -1ull;

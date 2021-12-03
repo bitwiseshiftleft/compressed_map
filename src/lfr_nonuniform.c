@@ -13,7 +13,6 @@
 #include "lfr_uniform.h"
 #include "util.h"
 #include "dedup.h"
-#include <stdio.h>
 
 #define LFR_INTERVAL_BYTES (40/8)
 #define LFR_INTERVAL_SH (8*(sizeof(lfr_locator_t) - LFR_INTERVAL_BYTES))
@@ -423,7 +422,7 @@ int API_VIS lfr_nonuniform_build (
             salt = fmix64(out->phases[phase-1]->salt ^ phase_salt[phase]);
         }
 
-        ret = lfr_builder_init(builder, nconstraints); // no salt yet, set in iteration
+        ret = lfr_builder_init(builder, nconstraints, 0, 0); // no salt yet, set in iteration
         if (ret) { goto done; }
 
         /* Build the uniform map using constrained items
