@@ -273,8 +273,8 @@ static int lfr_uniform_build_setup (
     /* Count number of elements in each block. */
     for (size_t i=0; i<builder->used; i++) {
         _lfr_hash_result_t hash = _lfr_uniform_hash (
-            builder->relations[i].query,
-            builder->relations[i].query_length,
+            builder->relations[i].key,
+            builder->relations[i].keybytes,
             salt, blocks
         );
         size_t a = 1+2*hash.block_positions[0];
@@ -674,12 +674,12 @@ static void *lfr_uniform_build_thread (void *args_void) {
     size_t blocks = nblocks(args->matrix->used);
     for (size_t i=start; i<end; i++) {
         _lfr_hash_result_t hash = _lfr_uniform_hash(
-            builder->relations[i].query,
-            builder->relations[i].query_length,
+            builder->relations[i].key,
+            builder->relations[i].keybytes,
             args->salt,
             blocks
         );
-        hash.augmented ^= builder->relations[i].response;
+        hash.augmented ^= builder->relations[i].value;
         lfr_uniform_block_index_t block_left  = 2 * hash.block_positions[0] + 1;
         lfr_uniform_block_index_t block_right = 2 * hash.block_positions[1] + 1;
 
@@ -921,7 +921,7 @@ int API_VIS lfr_builder_insert (
             if (new == NULL) return -ENOMEM;
             // patch up the pointers
             for (size_t i=0; i<builder->used; i++) {
-                builder->relations[i].query = new + (builder->relations[i].query - builder->data);
+                builder->relations[i].key = new + (builder->relations[i].key - builder->data);
             }
             builder->data = new;
             builder->data_capacity = new_capacity;
@@ -934,9 +934,9 @@ int API_VIS lfr_builder_insert (
     }
 
     size_t row = builder->used++;
-    builder->relations[row].query = key;
-    builder->relations[row].query_length = keybytes;
-    builder->relations[row].response = value;
+    builder->relations[row].key = key;
+    builder->relations[row].keybytes = keybytes;
+    builder->relations[row].value = value;
     return 0;
 }
 

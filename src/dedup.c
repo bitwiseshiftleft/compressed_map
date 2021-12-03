@@ -10,23 +10,23 @@
 #include <errno.h>
 #include "dedup.h"
 
-/** Compare two lfr_nonuniform_relations, with the given ordering of responses */
+/** Compare two lfr_nonuniform_relations, with the given ordering of values */
 static int cmp_relation(const void *avoid, const void *bvoid, int yes_overrides_no) {
     const lfr_relation_t
         *a = *(const lfr_relation_t *const*)avoid,
         *b = *(const lfr_relation_t *const*)bvoid;
     
-    /* Sort by query length */
-    if (a->query_length > b->query_length) return 1;
-    if (a->query_length < b->query_length) return -1;
+    /* Sort by key length */
+    if (a->keybytes > b->keybytes) return 1;
+    if (a->keybytes < b->keybytes) return -1;
     
-    /* Sort by query data */
-    int ret = memcmp(a->query,b->query,a->query_length);
+    /* Sort by key data */
+    int ret = memcmp(a->key,b->key,a->keybytes);
     if (ret) return ret;
 
-    /* Sort by response */
-    if (b->response > a->response) return  yes_overrides_no;
-    if (b->response < a->response) return -yes_overrides_no;
+    /* Sort by value */
+    if (b->value > a->value) return  yes_overrides_no;
+    if (b->value < a->value) return -yes_overrides_no;
     
     return 0;
 }
@@ -109,7 +109,7 @@ static bitset_t bloom_unique (
             if (!bitset_test_bit(potential_dups, i)) {
                 continue;
             }
-            bloom_hash(hashes, NHASHES, rel[i].query, rel[i].query_length, arbitrary_seed);
+            bloom_hash(hashes, NHASHES, rel[i].key, rel[i].keybytes, arbitrary_seed);
             for (int j=0; j<NHASHES; j++) {
                 size_t h = hashes[j] & mask;
                 uint64_t b = bloom_table[h/64];
@@ -125,7 +125,7 @@ static bitset_t bloom_unique (
         size_t hits = 0;
         for (ssize_t i=nrel-1; i>=0; i--) {
             if (!bitset_test_bit(potential_dups, i)) continue;
-            bloom_hash(hashes, NHASHES, rel[i].query, rel[i].query_length, arbitrary_seed);
+            bloom_hash(hashes, NHASHES, rel[i].key, rel[i].keybytes, arbitrary_seed);
             uint64_t in = 1;
             for (unsigned j=0; j<NHASHES && in; j++) {
                 size_t h = hashes[j] & mask;
@@ -205,11 +205,11 @@ int remove_duplicates (
     const lfr_relation_t *prev = NULL;
     
     for (size_t i=0; i<ndups; i++) {
-        if (prev && !memcmp(prev->query, idxs[i]->query, prev->query_length)) {
+        if (prev && !memcmp(prev->key, idxs[i]->key, prev->keybytes)) {
             bitset_clear_bit(relevant, idxs[i] - rel);
             n_out++;
-            int response_differs = prev->response != idxs[i]->response;
-            if (yes_overrides_no==0 && response_differs != 0) {
+            int value_differs = prev->value != idxs[i]->value;
+            if (yes_overrides_no==0 && value_differs != 0) {
                 free(idxs);
                 return -EEXIST;
             }

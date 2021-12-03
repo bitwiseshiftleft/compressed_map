@@ -54,9 +54,9 @@ typedef uint64_t lfr_response_t;
 
 /** A key->value relation, used to build the maps */
 typedef struct {
-    const uint8_t *query; // TODO: rename?
-    size_t query_length;
-    lfr_response_t response;
+    const uint8_t *key;
+    size_t keybytes;
+    lfr_response_t value;
 } lfr_relation_t;
 
 /** A builder to store the state of a uniform map before compiling it. */

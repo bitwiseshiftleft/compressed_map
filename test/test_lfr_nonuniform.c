@@ -106,10 +106,10 @@ int main(int argc, char **argv) {
     printf("Sketch created; sanity checking...\n");
     start = now();
     for (size_t i=0; i<total; i++) {
-        lfr_response_t answer = lfr_nonuniform_query(map,builder->relations[i].query,builder->relations[i].query_length);
-        if (answer != builder->relations[i].response) {
+        lfr_response_t answer = lfr_nonuniform_query(map,builder->relations[i].key,builder->relations[i].keybytes);
+        if (answer != builder->relations[i].value) {
             printf("Bug: query %lld answer should be %d but query gave %d\n",
-                (unsigned long long)i, (int)builder->relations[i].response, (int)answer);
+                (unsigned long long)i, (int)builder->relations[i].value, (int)answer);
         }
     }
     elapsed = now()-start;

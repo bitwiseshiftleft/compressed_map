@@ -281,7 +281,6 @@ static inline int constrained_this_phase (
     }
 }
 
-/* TODO better failure handling */
 #ifndef LFR_MAX_FAILURES
 #define LFR_MAX_FAILURES 100
 #endif
@@ -312,11 +311,11 @@ int API_VIS lfr_nonuniform_build (
 
     int *phase_salt = NULL;
     
-    // Find the maximum response
+    // Find the maximum value
     // TODO: support nitems = 0 or 1, or non-dense encodings (using a hash table)
     unsigned MAX_NITEMS = 1<<16, nitems=2;
     for (size_t i=0; i<nrelns; i++) {
-        lfr_response_t resp = relns[i].response;
+        lfr_response_t resp = relns[i].value;
         if (resp >= MAX_NITEMS) return -1;
         else if (resp+1 > nitems) nitems = resp+1;
     }
@@ -326,7 +325,7 @@ int API_VIS lfr_nonuniform_build (
 
     /* Count the items */
     for (size_t i=0; i<nrelns; i++) {
-        lfr_response_t resp = relns[i].response;
+        lfr_response_t resp = relns[i].value;
         assert(resp <= nitems);
         item_counts[resp]++;
     }
@@ -385,7 +384,7 @@ int API_VIS lfr_nonuniform_build (
         /* Count the number of constrained rows */
         bitset_clear_all(relevant, nrelns);
         for (size_t i=0; i<nrelns; i++) {
-            lfr_response_t resp = relns[i].response;
+            lfr_response_t resp = relns[i].value;
             lfr_locator_t
                 lowx = out->response_map[resp]->lower_bound-1,
                 high = out->response_map[(resp+1) % nitems]->lower_bound-1,
@@ -414,23 +413,13 @@ int API_VIS lfr_nonuniform_build (
         /* Create the builder */
         lfr_builder_destroy(builder);
 
-        lfr_salt_t salt;
-        if (phase == 0) {
-            /* (re)randomize salt for the whole operation */
-            if (( ret = getentropy(&salt, sizeof(salt)) )) goto done;
-        } else {
-            salt = fmix64(out->phases[phase-1]->salt ^ phase_salt[phase]);
-        }
-
         ret = lfr_builder_init(builder, nconstraints, 0, 0); // no salt yet, set in iteration
         if (ret) { goto done; }
 
-        /* Build the uniform map using constrained items
-         * TODO: move the retry to a few different salts
-         */
+        /* Build the uniform map using constrained items */
         for (size_t i=0; i<nrelns; i++) {
             if (!bitset_test_bit(relevant, i)) continue; // it's not constrained this phase
-            lfr_response_t resp = relns[i].response;
+            lfr_response_t resp = relns[i].value;
         
             lfr_locator_t
                 lowx = out->response_map[resp]->lower_bound-1,
@@ -440,16 +429,32 @@ int API_VIS lfr_nonuniform_build (
                                 
             int c = constrained_this_phase(&constraint, phlo, phhi, cur, lowx, high);
             assert(c);
-            lfr_builder_insert(builder, relns[i].query, relns[i].query_length, constraint);
+            lfr_builder_insert(builder, relns[i].key, relns[i].keybytes, constraint);
         }
         
         lfr_uniform_map_destroy(out->phases[phase]);
-        int phase_ret = lfr_uniform_build(out->phases[phase], builder, phhi+1-phlo, salt);
+        int phase_ret;
+        do {
+            /* Try repeatedly to build it with different salts */
+            lfr_salt_t salt;
+            if (phase == 0) {
+                /* (re)randomize salt for the whole operation */
+                if (( ret = getentropy(&salt, sizeof(salt)) )) goto done;
+            } else {
+                salt = fmix64(out->phases[phase-1]->salt ^ phase_salt[phase]);
+            }
+            phase_ret = lfr_uniform_build(out->phases[phase], builder, phhi+1-phlo, salt);
+            if (phase_ret == -EAGAIN) {
+                phase_salt[phase]++;
+                try++;
+            }
+        } while (phase_ret == -EAGAIN && try < nphases + LFR_MAX_FAILURES && phase_salt[phase] <= LFR_PHASE_TRIES);
         out->phases[phase]->_salt_hint = phase_salt[phase];
+
         if (phase_ret == 0 && phase < nphases-1) {
             /* It's not the last phase.  Adjust the values of all items.
              *
-             * TODO PERF: Once intervals are naturally aligned, we don't need
+             * PERF: Once intervals are naturally aligned, we don't need
              * to do this for most items: they take on a particular value in
              * their aligned phase, and a fixed 0/1 in all later phases
              * depending whether we start with second-most or second-least
@@ -461,7 +466,7 @@ int API_VIS lfr_nonuniform_build (
             for (size_t i=0; i<nrelns; i++) {
                 lfr_locator_t ci = current[i], mask=((lfr_locator_t)1<<phlo)-1;
                 ci &= mask;
-                ci += lfr_uniform_query(out->phases[phase], relns[i].query, relns[i].query_length) << phlo;
+                ci += lfr_uniform_query(out->phases[phase], relns[i].key, relns[i].keybytes) << phlo;
                 current[i] = ci;
             }
         }
