@@ -2,10 +2,10 @@
 
 * Make code more portable -- probably not full cmake though.
 * At least make the test/bench frameworks consistent.
-* Make a nonuniform builder?  Or remove the uniform builder and use pointers??
 * File-handling / ser / deser API.
 * Demo: CRL compression.
 * FIXME BUG: nonuniform maps don't work if an item has zero population.
+* Doxyfile
 
 # Longer term
 

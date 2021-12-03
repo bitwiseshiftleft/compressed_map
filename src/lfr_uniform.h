@@ -62,27 +62,22 @@ typedef struct {
 /** A builder to store the state of a uniform map before compiling it. */
 typedef struct {
     size_t used, capacity;
-    size_t blocks;
-    lfr_salt_t salt;
-    uint8_t value_bits;
     lfr_relation_t *relations;
-} lfr_uniform_builder_s, lfr_uniform_builder_t[1];
+} lfr_builder_s, lfr_builder_t[1];
 
 /** Initialize a map of the given capacity.  The size of the map when
  * built depends on its capacity, not how many rows are actually added.
  */
-int lfr_uniform_builder_init (
-    lfr_uniform_builder_t map,
-    size_t capacity,
-    size_t value_bits,
-    lfr_salt_t salt
+int lfr_builder_init (
+    lfr_builder_t map,
+    size_t capacity
 );
 
 /** Clear any relations in the map. */
-void lfr_uniform_builder_reset(lfr_uniform_builder_t builder);
+void lfr_builder_reset(lfr_builder_t builder);
 
 /** Destroy the map and free any memory it allocated. */
-void lfr_uniform_builder_destroy(lfr_uniform_builder_t builder);
+void lfr_builder_destroy(lfr_builder_t builder);
 
 /**
  * Set a relation in the map, so that when queried with
@@ -97,8 +92,8 @@ void lfr_uniform_builder_destroy(lfr_uniform_builder_t builder);
  * @return 0 on success.
  * @return -EINVAL if the map is already at capacity.
  */
-int lfr_uniform_insert (
-    lfr_uniform_builder_t builder,
+int lfr_builder_insert (
+    lfr_builder_t builder,
     const uint8_t *key,
     size_t keybytes,
     uint64_t value
@@ -120,22 +115,24 @@ typedef struct {
 
 /** High-level build function: using the builder, compile to a map object.
  *
- * @param builder The builder object.
  * @param map The map object.  On success, this function will initialize
  * the map and allocate memory for it.
+ * @param builder The builder object.
+ * @param value_bits The number of bits of the responses to use.
+ * @param salt The salt to be used.
  * @return 0 on success.
  * @return -ENOMEM Not enough memory to solve / return the map.
  * @return -EAGAIN The solution failed; either it has inconsistent values
- * or should be tried again with a different seed.
+ * or should be tried again with a different salt.
  */
-int lfr_uniform_build(lfr_uniform_map_t map, const lfr_uniform_builder_t builder);
+int lfr_uniform_build(lfr_uniform_map_t map, const lfr_builder_t builder, unsigned value_bits, lfr_salt_t salt);
 
 /** As lfr_uniform_build, but if the library was built with thread support, you
  * can set the number of threads.  Set to 0 for default.  If the library was not
  * built with thread support (by default it is not), then this call ignores
  * nthreads and always uses 1 thread.
  */
-int lfr_uniform_build_threaded(lfr_uniform_map_t map, const lfr_uniform_builder_t builder, int nthreads);
+int lfr_uniform_build_threaded(lfr_uniform_map_t map, const lfr_builder_t builder, unsigned value_bits, lfr_salt_t salt, int nthreads);
 
 /** Destroy a map object, and deallocate any memory used to create it. */
 void lfr_uniform_map_destroy(lfr_uniform_map_t map);

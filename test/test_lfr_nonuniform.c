@@ -41,8 +41,6 @@ int main(int argc, char **argv) {
     }
 
     uint8_t *inputs;
-     
-    lfr_relation_t *relns = malloc(total * sizeof(*relns));
     
     unsigned long long neach_remaining[nitems];
     for (unsigned i=0; i<nitems; i++) { neach_remaining[i] = neach[i]; }
@@ -60,21 +58,32 @@ int main(int argc, char **argv) {
     for (size_t b=0; b<query_length * total; b++) {
         inputs[b] = random();
     }
+
+    lfr_builder_t builder;
+    ret = lfr_builder_init(builder,total);
+    if (ret) {
+        printf("Can't initialize builder: %s\n", strerror(ret));
+        return ret;
+    }
     for (unsigned i=0; i<total; i++) {
-        relns[i].query = &inputs[query_length*i];
-        relns[i].query_length = query_length;
-        
+        int resp = 0;
         size_t it = (random() ^ (size_t)random()<<20) % (total-i);
-        relns[i].response = 0;
         for (unsigned j=0; j<nitems; j++) {
             if (it < neach_remaining[j]) {
-                relns[i].response = j;
+                resp = j;
                 neach_remaining[j]--;
                 break;
             } else {
                 it -= neach_remaining[j];
             }
         }
+
+        ret = lfr_builder_insert(builder,&inputs[query_length*i],query_length,resp);
+        if (ret) {
+            printf("Can't add row %d: %s\n", i, strerror(ret));
+            return ret;
+        }
+        
     }
 
     
@@ -86,7 +95,7 @@ int main(int argc, char **argv) {
         
     printf("Create lfr_nonuniform...\n");
     start = now();
-    ret = lfr_nonuniform_build(map, relns, total, yes_overrides_no);
+    ret = lfr_nonuniform_build(map, builder, yes_overrides_no);
     if (ret) {
         printf("Sketch failed!\n");
         return -1;
@@ -97,10 +106,10 @@ int main(int argc, char **argv) {
     printf("Sketch created; sanity checking...\n");
     start = now();
     for (size_t i=0; i<total; i++) {
-        lfr_response_t answer = lfr_nonuniform_query(map,relns[i].query,relns[i].query_length);
-        if (answer != relns[i].response) {
+        lfr_response_t answer = lfr_nonuniform_query(map,builder->relations[i].query,builder->relations[i].query_length);
+        if (answer != builder->relations[i].response) {
             printf("Bug: query %lld answer should be %d but query gave %d\n",
-                (unsigned long long)i, (int)relns[i].response, (int)answer);
+                (unsigned long long)i, (int)builder->relations[i].response, (int)answer);
         }
     }
     elapsed = now()-start;

@@ -95,30 +95,25 @@ static inline void _lfr_uniform_sample_block_positions (
  * End of code specific to frayed ribbon shape *
  ***********************************************/
 
-void API_VIS lfr_uniform_builder_destroy(lfr_uniform_builder_t matrix) {
+void API_VIS lfr_builder_destroy(lfr_builder_t matrix) {
     free(matrix->relations);
     memset(matrix,0,sizeof(*matrix));
 }
 
-void API_VIS lfr_uniform_builder_reset(lfr_uniform_builder_t matrix) {
+void API_VIS lfr_builder_reset(lfr_builder_t matrix) {
     matrix->used = 0;
 }
 
-int API_VIS lfr_uniform_builder_init (
-    lfr_uniform_builder_t builder,
-    size_t capacity,
-    size_t value_bits,
-    lfr_salt_t salt
+int API_VIS lfr_builder_init (
+    lfr_builder_t builder,
+    size_t capacity
 ) {
     builder->capacity = capacity;
-    builder->blocks = _lfr_uniform_provision_columns(capacity) / 8 / LFR_BLOCKSIZE;
-    builder->value_bits = value_bits;
-    builder->salt = salt;
     builder->used = 0;
 
     builder->relations = calloc(capacity, sizeof(*builder->relations));    
     if (builder->relations == NULL) {
-        lfr_uniform_builder_destroy(builder);
+        lfr_builder_destroy(builder);
         return -ENOMEM;
     }
     
@@ -191,7 +186,7 @@ static lfr_uniform_block_index_t resolution_block (
     return b & -delta;
 }
 
-static void lfr_uniform_builder_destroy_groups(group_t *groups, size_t ngroups) {
+static void lfr_builder_destroy_groups(group_t *groups, size_t ngroups) {
     /* Destroy and free the groups, as part of a cleanup routine */
     if (groups) {
         for (size_t i=0; i<ngroups; i++) {
@@ -246,13 +241,21 @@ static uint32_t mark_as_mine(group_t *group, uint32_t my_mark) {
 #endif
 }
 
+/** Return the number of blocks required for a given number of relations */
+static inline size_t nblocks(size_t nrelns) {
+    return _lfr_uniform_provision_columns(nrelns) / 8 / LFR_BLOCKSIZE;
+}
+
 /* Load the data into matrices for the group solver */
 static int lfr_uniform_build_setup (
     group_t **pgroups,
-    const lfr_uniform_builder_t builder
+    const lfr_builder_t builder,
+    lfr_salt_t salt,
+    unsigned value_bits
 ) {
     int ret=0;
-    size_t log_blocks = high_bit(builder->blocks-1);
+    size_t blocks = nblocks(builder->used);
+    size_t log_blocks = high_bit(blocks-1);
     size_t ngroups = 1ull << (2+log_blocks);
     group_t *groups = calloc(ngroups, sizeof(*groups));
     
@@ -261,7 +264,7 @@ static int lfr_uniform_build_setup (
         _lfr_hash_result_t hash = _lfr_uniform_hash (
             builder->relations[i].query,
             builder->relations[i].query_length,
-            builder->salt, builder->blocks
+            salt, blocks
         );
         size_t a = 1+2*hash.block_positions[0];
         size_t b = 1+2*hash.block_positions[1];
@@ -281,10 +284,10 @@ static int lfr_uniform_build_setup (
 #endif
 
     /* Create matrices */
-    for (size_t i=0; i<builder->blocks; i++) {
+    for (size_t i=0; i<blocks; i++) {
         group_t *g = &groups[2*i+1];
         g->cols = LFR_BLOCKSIZE*8;
-        ret = tile_matrix_init(&g->data, g->rows, LFR_BLOCKSIZE*8, builder->value_bits);
+        ret = tile_matrix_init(&g->data, g->rows, LFR_BLOCKSIZE*8, value_bits);
         if (ret) { goto fail; }
         g->row_resolution = calloc(g->rows, sizeof(*g->row_resolution));
         if (g->row_resolution == NULL) { goto fail; }
@@ -297,7 +300,7 @@ static int lfr_uniform_build_setup (
 
 fail:
     if (ret==0) ret = -ENOMEM;
-    lfr_uniform_builder_destroy_groups(groups, ngroups);
+    lfr_builder_destroy_groups(groups, ngroups);
     return ret;
 }
 
@@ -590,9 +593,11 @@ done:
 }
 
 typedef struct  {
-    const lfr_uniform_builder_s *matrix;
+    const lfr_builder_s *matrix; // TODO: rename
     group_t *groups;
     size_t ngroups;
+    lfr_salt_t salt;
+    unsigned value_bits;
 #if LFR_THREADED
     pthread_mutex_t mut;
 #endif
@@ -634,7 +639,7 @@ static void initialize_row (
 
 static void *lfr_uniform_build_thread (void *args_void) {
     lfr_uniform_build_args_t *args = (lfr_uniform_build_args_t *)args_void;
-    const lfr_uniform_builder_s *builder = args->matrix;
+    const lfr_builder_s *builder = args->matrix;
     group_t *groups = args->groups;
     size_t ngroups = args->ngroups;
     
@@ -655,12 +660,13 @@ static void *lfr_uniform_build_thread (void *args_void) {
     /* Copy rows into submatrices, and count resolutions */
     size_t start = args->matrix->used*threadid / nthreads;
     size_t end = args->matrix->used*(threadid+1) / nthreads;
+    size_t blocks = nblocks(args->matrix->used);
     for (size_t i=start; i<end; i++) {
         _lfr_hash_result_t hash = _lfr_uniform_hash(
             builder->relations[i].query,
             builder->relations[i].query_length,
-            builder->salt,
-            builder->blocks
+            args->salt,
+            blocks
         );
         hash.augmented ^= builder->relations[i].response;
         lfr_uniform_block_index_t block_left  = 2 * hash.block_positions[0] + 1;
@@ -731,7 +737,7 @@ static void *lfr_uniform_build_thread (void *args_void) {
     lgstep--;
     group_t *final_group = &groups[1ull<<lgstep];
     if (i_did_last) {
-        ret = tile_matrix_init(&final_group->data, final_group->systematic.rhs.cols, 0, args->matrix->value_bits);
+        ret = tile_matrix_init(&final_group->data, final_group->systematic.rhs.cols, 0, args->value_bits);
         mark_as_solved(final_group,2,ret);
     } else {
         ret = wait_for_solved(final_group,2);
@@ -773,19 +779,28 @@ void API_VIS lfr_uniform_map_destroy(lfr_uniform_map_t doomed) {
     memset(doomed, 0, sizeof(*doomed));
 }
 
-int API_VIS lfr_uniform_build (lfr_uniform_map_t output, const lfr_uniform_builder_t builder) {
-    return lfr_uniform_build_threaded(output,builder,0);
+int API_VIS lfr_uniform_build (lfr_uniform_map_t output, const lfr_builder_t builder, unsigned value_bits, lfr_salt_t salt) {
+    return lfr_uniform_build_threaded(output,builder,value_bits,salt,0);
 }
 
 size_t API_VIS lfr_uniform_map_size(const lfr_uniform_map_t map) {
     return map->blocks * LFR_BLOCKSIZE * map->value_bits;
 }
 
-int API_VIS lfr_uniform_build_threaded (lfr_uniform_map_t output, const lfr_uniform_builder_t matrix, int nthreads) {
+int API_VIS lfr_uniform_build_threaded (
+    lfr_uniform_map_t output,
+    const lfr_builder_t builder,
+    unsigned value_bits,
+    lfr_salt_t salt,
+    int nthreads
+) {
     int ret=0;
-    size_t ngroups = 1ull << (2+high_bit(matrix->blocks-1));
+    size_t blocks = nblocks(builder->used);
+    size_t ngroups = 1ull << (2+high_bit(blocks-1));
     group_t *groups = NULL;
     memset(output,0,sizeof(*output));
+
+    if (value_bits > 8*sizeof(lfr_response_t)) return -EINVAL;
 
 #if LFR_THREADED
     size_t len = sizeof(nthreads);
@@ -799,11 +814,13 @@ int API_VIS lfr_uniform_build_threaded (lfr_uniform_map_t output, const lfr_unif
 
     lfr_uniform_build_args_t args;
     memset(&args,0,sizeof(args));
-    ret = lfr_uniform_build_setup(&groups, matrix);
+    args.salt = salt;
+    ret = lfr_uniform_build_setup(&groups, builder, salt, value_bits);
     if (ret) { goto done; }
 
     // Forward solve
-    args.matrix = &matrix[0];
+    args.matrix = &builder[0];
+    args.value_bits = value_bits;
     args.groups = groups;
     args.ngroups = ngroups;
     args.counter = 0;
@@ -836,21 +853,21 @@ int API_VIS lfr_uniform_build_threaded (lfr_uniform_map_t output, const lfr_unif
     if (ret) goto done;
 
     // Write output
-    output->data = calloc(matrix->value_bits, matrix->blocks * LFR_BLOCKSIZE);
+    output->data = calloc(value_bits, blocks * LFR_BLOCKSIZE);
     if (output->data == NULL) {
         ret = -ENOMEM;
         goto done;
     }
-    output->salt = matrix->salt;
-    output->value_bits = matrix->value_bits;
+    output->salt = salt;
+    output->value_bits = value_bits;
     output->data_is_mine = 1;
-    output->blocks = matrix->blocks;
+    output->blocks = blocks;
 
     size_t byte_index=0;
-    for (size_t block=0; block<matrix->blocks; block++) {
+    for (size_t block=0; block<blocks; block++) {
         const tile_matrix_t *m = &groups[2*block+1].data;
         size_t tstride = m->stride, off = TILES_SPANNING(m->cols);
-        for (size_t which_augcol=0; which_augcol<matrix->value_bits; which_augcol++) {
+        for (size_t which_augcol=0; which_augcol<value_bits; which_augcol++) {
             for (size_t tile=0; tile<LFR_BLOCKSIZE*8/TILE_SIZE; tile++) {
                 tile_t out = m->data[tile*tstride + off + which_augcol/TILE_SIZE] >> (TILE_SIZE*(which_augcol % TILE_SIZE));
                 for (int b=0; b<TILE_SIZE/8; b++) {
@@ -861,13 +878,13 @@ int API_VIS lfr_uniform_build_threaded (lfr_uniform_map_t output, const lfr_unif
     }
 
 done:
-    lfr_uniform_builder_destroy_groups(groups, ngroups);
+    lfr_builder_destroy_groups(groups, ngroups);
     if (ret != 0 && ret != -ENOMEM) ret = -EAGAIN;
     return ret;
 }
 
-int API_VIS lfr_uniform_insert (
-    lfr_uniform_builder_t builder,
+int API_VIS lfr_builder_insert (
+    lfr_builder_t builder,
     const uint8_t *key,
     size_t keybytes,
     uint64_t value

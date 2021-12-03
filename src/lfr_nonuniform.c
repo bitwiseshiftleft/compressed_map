@@ -13,6 +13,7 @@
 #include "lfr_uniform.h"
 #include "util.h"
 #include "dedup.h"
+#include <stdio.h>
 
 #define LFR_INTERVAL_BYTES (40/8)
 #define LFR_INTERVAL_SH (8*(sizeof(lfr_locator_t) - LFR_INTERVAL_BYTES))
@@ -292,8 +293,7 @@ static inline int constrained_this_phase (
 /* Create a lfr_nonuniform. */
 int API_VIS lfr_nonuniform_build (
     lfr_nonuniform_map_t out,
-    const lfr_relation_t *relns,
-    size_t nrelns,
+    const lfr_builder_t nonu_builder,
     int yes_overrides_no
 ) { 
     /*************************************************************
@@ -305,8 +305,9 @@ int API_VIS lfr_nonuniform_build (
     /* Preinitialize so that we can goto done */
     memset(out,0,sizeof(*out));
     int ret = -1;
-    size_t *item_counts = NULL;
+    size_t *item_counts = NULL, nrelns = nonu_builder->used;
     lfr_locator_t plan;
+    const lfr_relation_t *relns = nonu_builder->relations;
     lfr_locator_t *current = NULL;
     bitset_t relevant = NULL;
 
@@ -355,7 +356,7 @@ int API_VIS lfr_nonuniform_build (
     current = calloc(nrelns, sizeof(*current));
     if (current == NULL) goto alloc_failed;
     
-    lfr_uniform_builder_t builder;
+    lfr_builder_t builder;
     memset(builder,0,sizeof(builder));
 
     // Search tree for suitable salts
@@ -412,7 +413,7 @@ int API_VIS lfr_nonuniform_build (
         }
         
         /* Create the builder */
-        lfr_uniform_builder_destroy(builder);
+        lfr_builder_destroy(builder);
 
         lfr_salt_t salt;
         if (phase == 0) {
@@ -422,10 +423,12 @@ int API_VIS lfr_nonuniform_build (
             salt = fmix64(out->phases[phase-1]->salt ^ phase_salt[phase]);
         }
 
-        ret = lfr_uniform_builder_init(builder, nconstraints, phhi-phlo+1, salt); // no salt yet, set in iteration
+        ret = lfr_builder_init(builder, nconstraints); // no salt yet, set in iteration
         if (ret) { goto done; }
 
-        /* Build the uniform map using constrained items */
+        /* Build the uniform map using constrained items
+         * TODO: move the retry to a few different salts
+         */
         for (size_t i=0; i<nrelns; i++) {
             if (!bitset_test_bit(relevant, i)) continue; // it's not constrained this phase
             lfr_response_t resp = relns[i].response;
@@ -438,11 +441,11 @@ int API_VIS lfr_nonuniform_build (
                                 
             int c = constrained_this_phase(&constraint, phlo, phhi, cur, lowx, high);
             assert(c);
-            lfr_uniform_insert(builder, relns[i].query, relns[i].query_length, constraint);
+            lfr_builder_insert(builder, relns[i].query, relns[i].query_length, constraint);
         }
         
         lfr_uniform_map_destroy(out->phases[phase]);
-        int phase_ret = lfr_uniform_build(out->phases[phase], builder);
+        int phase_ret = lfr_uniform_build(out->phases[phase], builder, phhi+1-phlo, salt);
         out->phases[phase]->_salt_hint = phase_salt[phase];
         if (phase_ret == 0 && phase < nphases-1) {
             /* It's not the last phase.  Adjust the values of all items.
@@ -482,7 +485,7 @@ done:
     free(phase_salt);
     bitset_destroy(relevant);
     free(current);
-    lfr_uniform_builder_destroy(builder);
+    lfr_builder_destroy(builder);
     free(item_counts);
     if (ret != 0) lfr_nonuniform_map_destroy(out);
     

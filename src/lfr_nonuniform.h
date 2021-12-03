@@ -49,8 +49,7 @@ typedef struct {
 /**
  * Create a nonuniform static function from a collection of relations.
  * @param map The map
- * @param relns The relations used to create the map.
- * @param nrelns The number of relations
+ * @param builder The relation data
  * @param dedup_direction If zero, if there are duplicate keys in the map
  *   with differing values, return -EEXIST.  If positive, use the largest
  *   value for those keys.  If negative, use the smallest value.
@@ -69,8 +68,7 @@ typedef struct {
  */
 int lfr_nonuniform_build (
     lfr_nonuniform_map_t map,
-    const lfr_relation_t *relns,
-    size_t nrelns,
+    const lfr_builder_t builder,
     int dedup_direction
 );
 

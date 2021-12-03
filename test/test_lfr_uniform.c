@@ -115,7 +115,7 @@ int main(int argc, const char **argv) {
     }
     
     lfr_uniform_map_t map;
-    lfr_uniform_builder_t matrix;
+    lfr_builder_t matrix;
     
     int successive_fails = 0;
     for (long long blocks=blocks_min; blocks <= blocks_max && (bail <= 0 || successive_fails < bail); ) {
@@ -128,26 +128,25 @@ int main(int argc, const char **argv) {
         uint8_t salt_as_bytes[sizeof(salt)];
         randomize(salt_as_bytes, seed, blocks<<32 ^ 0xFFFFFFFF, sizeof(salt_as_bytes));
         salt = le2ui(salt_as_bytes, sizeof(salt_as_bytes));
-        if (( ret=lfr_uniform_builder_init(matrix, rows, augmented, salt) )) {
+        if (( ret=lfr_builder_init(matrix, rows) )) {
             fprintf(stderr, "Init  error: %s\n", strerror(-ret));
             return ret;
         }
-        assert(matrix->blocks <= (unsigned long long) blocks);
     
         double start, tot_construct=0, tot_rand=0, tot_query=0, tot_sample=0;
         size_t passes=0;
         for (unsigned t=0; t<ntrials; t++) {
             start = now();
 
-            lfr_uniform_builder_reset(matrix);
+            lfr_builder_reset(matrix);
             randomize(keys, seed, blocks<<32 ^ t<<1,    rows*keylen);
             randomize((uint8_t*)values,seed,blocks<<32 ^ t<<1 ^ 1,rows*sizeof(*values));
             for (unsigned i=0; i<rows; i++) {
-                lfr_uniform_insert(matrix,&keys[keylen*i],keylen,values[i]);
+                lfr_builder_insert(matrix,&keys[keylen*i],keylen,values[i]);
             }
             record(&start, &tot_sample);
 
-            ret=lfr_uniform_build_threaded(map, matrix, nthreads);
+            ret=lfr_uniform_build_threaded(map, matrix, augmented, salt, nthreads);
             record(&start, &tot_construct);
             if (ret) {
                 if (verbose) printf("Solve error: %d\n", ret);
@@ -189,7 +188,7 @@ int main(int argc, const char **argv) {
             sps);
         fflush(stdout);
         
-        lfr_uniform_builder_destroy(matrix);
+        lfr_builder_destroy(matrix);
 norows:
         if (is_exponential) {
             long long blocks2 = blocks * ratio;
