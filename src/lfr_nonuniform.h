@@ -8,14 +8,12 @@
  * differs significantly from uniform.
  *
  * They alse differ from the uniform case with respect to retries.
- * The nonuniform case fixes a salt before it starts adding rows, so
- * that it can store only the hashes of the items.  If building fails,
- * then one must try again from the beginning.  But the nonuniform
- * case proceeds in several phases, each of which requires building
- * an lfr_uniform structure.  This would amplify the probability of
- * failure.  Therefore the nonuniform case stores the entire input,
- * so that it can re-choose salts and retry individual phases if they
- * fail.
+ * In the nonuniform case, if building fails, it simply returns -EAGAIN
+ * But the nonuniform case proceeds in several phases, each of which
+ * requires building an lfr_uniform structure.  This would amplify the
+ * probability of failure.  Therefore the nonuniform case stores the
+ * entire input, so that it can re-choose salts and retry individual
+ * phases if they fail.
  */
 #ifndef __LFR_NONUNIFORM_H__
 #define __LFR_NONUNIFORM_H__

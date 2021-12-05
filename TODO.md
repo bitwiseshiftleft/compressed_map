@@ -7,7 +7,9 @@
 * FIXME BUG: nonuniform maps don't work if an item has zero population.
 * Should uniform maps have dupe protection?
 * Should uniform maps support automatic retries?
+* Finish builder as hash table
 * Doxyfile
+* C++ interface
 
 # Longer term
 

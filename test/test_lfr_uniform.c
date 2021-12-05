@@ -12,6 +12,10 @@
 #include <assert.h>
 #include "util.h" // for le2ui
 
+#ifndef LFR_BLOCKSIZE
+#define LFR_BLOCKSIZE 4
+#endif
+
 static double now() {
     struct timeval tv;
     if (gettimeofday(&tv, NULL)) return 0;
