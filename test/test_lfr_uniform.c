@@ -43,7 +43,7 @@ void randomize(uint8_t *x, uint64_t seed, uint64_t nonce, size_t length) {
 void usage(const char *fail, const char *me, int exitcode) {
     if (fail) fprintf(stderr, "Unknown argument: %s\n", fail);
     fprintf(stderr,"Usage: %s [--deficit 8] [--threads 0] [--augmented 8] [--blocks 2||--rows 32] [--blocks-max 0]\n", me);
-    fprintf(stderr,"  [--blocks-step 10] [--exp 1.1] [--ntrials 100] [--verbose] [--seed 2] [--bail 3]\n");
+    fprintf(stderr,"  [--blocks-step 10] [--exp 1.1] [--ntrials 100] [--verbose] [--seed 2] [--bail 3] [--keylen 8] [--zeroize]\n");
     exit(exitcode);
 }
 
@@ -51,7 +51,9 @@ int main(int argc, const char **argv) {
     long long blocks_min=2, blocks_max=-1, blocks_step=10, augmented=8, ntrials=100;
     uint64_t seed = 2;
     double ratio = 1.1;
-    int is_exponential = 0, ret, verbose=0, bail=3, nthreads=0;
+    int is_exponential = 0, ret, verbose=0, bail=3, nthreads=0, zeroize=0;
+    
+    size_t keylen = 8;
         
     for (int i=1; i<argc; i++) {
         const char *arg = argv[i];
@@ -74,6 +76,10 @@ int main(int argc, const char **argv) {
         } else if (!strcmp(arg,"--rows-step") && i<argc-1) {
             blocks_step = atoll(argv[++i]) / LFR_BLOCKSIZE / 8;
             is_exponential = 0;
+        } else if (!strcmp(arg,"--keylen") && i<argc-1) {
+            keylen = atoll(argv[++i]);
+        } else if (!strcmp(arg,"--zeroize")) {
+            zeroize = 1;
         } else if (!strcmp(arg,"--exp")) {
             is_exponential = 1;
             if (i <argc-1) ratio = atof(argv[++i]);
@@ -98,8 +104,6 @@ int main(int argc, const char **argv) {
         return 1;
     }
     unsigned rows_max = _lfr_uniform_provision_max_rows(LFR_BLOCKSIZE*8*blocks_max);
-    
-    size_t keylen = 8;
 
     uint8_t  *keys   = malloc(rows_max*keylen);
     uint64_t *values = calloc(rows_max, sizeof(*values));
@@ -144,17 +148,21 @@ int main(int argc, const char **argv) {
 
             lfr_builder_reset(matrix);
             randomize(keys, seed, blocks<<32 ^ t<<1,    rows*keylen);
-            randomize((uint8_t*)values,seed,blocks<<32 ^ t<<1 ^ 1,rows*sizeof(*values));
+            if (!zeroize) randomize((uint8_t*)values,seed,blocks<<32 ^ t<<1 ^ 1,rows*sizeof(*values));
             record(&start, &tot_sample);
 
-            for (unsigned i=0; i<rows; i++) {
-                lfr_builder_insert(matrix,&keys[keylen*i],keylen,values[i]);
+            for (unsigned i=0; i<rows && !ret; i++) {
+                ret = lfr_builder_insert(matrix,&keys[keylen*i],keylen,values[i]);
+            }
+            if (ret) {
+                printf("Insert error %d = %s\n", ret, strerror(-ret));
+                continue;
             }
 
             ret=lfr_uniform_build_threaded(map, matrix, augmented, salt, nthreads);
             record(&start, &tot_construct);
             if (ret) {
-                if (verbose) printf("Solve error: %d\n", ret);
+                if (verbose) printf("Solve error: %d = %s\n", ret, strerror(-ret));
                 continue;
             }
         
