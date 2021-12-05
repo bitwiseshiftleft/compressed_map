@@ -48,17 +48,9 @@ typedef struct {
  * Create a nonuniform static function from a collection of relations.
  * @param map The map
  * @param builder The relation data
- * @param dedup_direction If zero, if there are duplicate keys in the map
- *   with differing values, return -EEXIST.  If positive, use the largest
- *   value for those keys.  If negative, use the smallest value.
  * @return 0 on success.
  * @return -ENOMEM if we ran out of memory.
- * @return -EEXIST if duplicate keys were present.
  * @return -EAGAIN if we tried and failed too many times.
- *
- * @todo The duplicate detection is a hack.  It's slow, and it's done
- * after the map size is estimated, which means that a map with very
- * many duplicates will use bad estimates when setting its parameters.
  *
  * @todo This function assumes a dense encoding of the responses, e.g. they
  * are 0 .. 5.  It will take huge amounts of memory if one of the responses
@@ -66,8 +58,7 @@ typedef struct {
  */
 int lfr_nonuniform_build (
     lfr_nonuniform_map_t map,
-    const lfr_builder_t builder,
-    int dedup_direction
+    const lfr_builder_t builder
 );
 
 /** Destroy the map, deallocate its memory (except the struct) and zeroize it */

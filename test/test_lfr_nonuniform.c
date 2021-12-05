@@ -18,7 +18,6 @@ static double now() {
 }
 
 int main(int argc, char **argv) {
-    int yes_overrides_no = 1;
     unsigned nitems = 2;
     int ret;
     size_t query_length = 32;
@@ -60,7 +59,7 @@ int main(int argc, char **argv) {
     }
 
     lfr_builder_t builder;
-    ret = lfr_builder_init(builder,total,0,0);
+    ret = lfr_builder_init(builder,total,0,LFR_NO_COPY_DATA);
     if (ret) {
         printf("Can't initialize builder: %s\n", strerror(ret));
         return ret;
@@ -95,7 +94,7 @@ int main(int argc, char **argv) {
         
     printf("Create lfr_nonuniform...\n");
     start = now();
-    ret = lfr_nonuniform_build(map, builder, yes_overrides_no);
+    ret = lfr_nonuniform_build(map, builder);
     if (ret) {
         printf("Sketch failed!\n");
         return -1;

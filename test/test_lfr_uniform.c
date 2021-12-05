@@ -132,12 +132,12 @@ int main(int argc, const char **argv) {
         uint8_t salt_as_bytes[sizeof(salt)];
         randomize(salt_as_bytes, seed, blocks<<32 ^ 0xFFFFFFFF, sizeof(salt_as_bytes));
         salt = le2ui(salt_as_bytes, sizeof(salt_as_bytes));
-        if (( ret=lfr_builder_init(matrix, rows,0,0) )) {
+        if (( ret=lfr_builder_init(matrix, rows,0,LFR_NO_COPY_DATA) )) {
             fprintf(stderr, "Init  error: %s\n", strerror(-ret));
             return ret;
         }
     
-        double start, tot_construct=0, tot_rand=0, tot_query=0, tot_sample=0;
+        double start, tot_construct=0, tot_query=0, tot_sample=0;
         size_t passes=0;
         for (unsigned t=0; t<ntrials; t++) {
             start = now();
@@ -145,10 +145,11 @@ int main(int argc, const char **argv) {
             lfr_builder_reset(matrix);
             randomize(keys, seed, blocks<<32 ^ t<<1,    rows*keylen);
             randomize((uint8_t*)values,seed,blocks<<32 ^ t<<1 ^ 1,rows*sizeof(*values));
+            record(&start, &tot_sample);
+
             for (unsigned i=0; i<rows; i++) {
                 lfr_builder_insert(matrix,&keys[keylen*i],keylen,values[i]);
             }
-            record(&start, &tot_sample);
 
             ret=lfr_uniform_build_threaded(map, matrix, augmented, salt, nthreads);
             record(&start, &tot_construct);
@@ -185,10 +186,10 @@ int main(int argc, const char **argv) {
   	        successive_fails ++;
 	    }
         if (tot_construct > 0) sps = passes / tot_construct;
-        printf("Size %6d*%d*8 - %d x +%d pass rate = %4d / %4d = %5.1f%%, rand/trial=%0.5f s, time/trial=%0.5f s, sample/row=%0.5f ns, build/row=%0.5f us, query/row=%0.5f us,  SPS=%0.3f\n",
+        printf("Size %6d*%d*8 - %d x +%d pass rate = %4d / %4d = %5.1f%%, time/trial=%0.5f s, sample/row=%0.5f ns, build/row=%0.5f us, query/row=%0.5f us,  SPS=%0.3f\n",
             (int)blocks, (int)LFR_BLOCKSIZE, (int)row_deficit, (int)augmented, (int)passes,
             (int)ntrials, 100.0*passes/ntrials,
-            tot_rand/ntrials, tot_construct/ntrials, ns_per_sample, us_per_build, us_per_query,
+            tot_construct/ntrials, ns_per_sample, us_per_build, us_per_query,
             sps);
         fflush(stdout);
         

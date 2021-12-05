@@ -11,8 +11,8 @@
 #include <sys/random.h>
 #include "lfr_nonuniform.h"
 #include "lfr_uniform.h"
+#include "bitset.h"
 #include "util.h"
-#include "dedup.h"
 
 #define LFR_INTERVAL_BYTES (40/8)
 #define LFR_INTERVAL_SH (8*(sizeof(lfr_locator_t) - LFR_INTERVAL_BYTES))
@@ -291,13 +291,11 @@ static inline int constrained_this_phase (
 /* Create a lfr_nonuniform. */
 int API_VIS lfr_nonuniform_build (
     lfr_nonuniform_map_t out,
-    const lfr_builder_t nonu_builder,
-    int yes_overrides_no
+    const lfr_builder_t nonu_builder
 ) { 
     /*************************************************************
      * Setup and counting phase.
-     * Remove duplicates, count the items, formulate a plan,
-     * allocate space, create headers.
+     * Count the items, formulate a plan, allocate space, create headers.
      *************************************************************/
 
     /* Preinitialize so that we can goto done */
@@ -396,13 +394,6 @@ int API_VIS lfr_nonuniform_build (
                 bitset_set_bit(relevant,i);
             }
         }
-
-        /* Remove duplicates.  Done on phase data because it's slow */
-        size_t ndupes;
-        if (( ret = remove_duplicates (
-            relevant, &ndupes, relns, nrelns, yes_overrides_no
-        ))) { goto done; }
-        nconstraints -= ndupes;
         
         if (nconstraints > get_nconstr_target(plan, phase, nitems, item_counts, out->response_map)) {
             // Too many false positives from previous phase
@@ -413,7 +404,7 @@ int API_VIS lfr_nonuniform_build (
         /* Create the builder */
         lfr_builder_destroy(builder);
 
-        ret = lfr_builder_init(builder, nconstraints, 0, 0); // no salt yet, set in iteration
+        ret = lfr_builder_init(builder, nconstraints, 0, LFR_NO_COPY_DATA | LFR_NO_HASHTABLE); // no salt yet, set in iteration
         if (ret) { goto done; }
 
         /* Build the uniform map using constrained items */

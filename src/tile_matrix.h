@@ -3,7 +3,7 @@
  * @copyright 2020-2021 Rambus Inc.
  *
  * Operations on matrices, represented by 8x8 submatrix "tiles".
- * @todo: document restructions on all these functions, e.g. on matrix dimensions
+ * @todo: document restrictions on all these functions, e.g. on matrix dimensions
  */
 #ifndef __TILE_MATRIX_H__
 #define __TILE_MATRIX_H__

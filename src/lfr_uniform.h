@@ -12,7 +12,8 @@
  * Building a static function may fail, with a few % probability.
  * If it fails due to EAGAIN, you may want to retry with a different
  * salt.  Construction fails with duplicate keys even if the values
- * are the same.  (TODO: optionally run dedup first?)
+ * are the same (i.e. if you created the builder using LFR_NO_HASHTABLE
+ * and then inserted a duplicate).
  * 
  * Note well! This is a research-grade library, and not ready for
  * production use.  Also, note that this library is not designed
@@ -28,27 +29,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/**
- * Set a relation in the map, so that when queried with
- * the given key, it will return a value matching the given
- * value.  Only the least-significant map->value_bits bits
- * will be stored.
- *
- * @param builder The uniform map-builder object.
- * @param key Pointer to the key data.
- * @param keybytes Length of the key data in bytes.
- * @param value The value to associate to the key.
- * @return 0 on success.
- * @return -ENOMEM if the map is over the allocated capacity,
- * and the size cannot be increased.
- */
-int lfr_builder_insert (
-    lfr_builder_t builder,
-    const uint8_t *key,
-    size_t keybytes,
-    lfr_response_t value
-);
 
 /*****************************************************************
  *                     Compiled uniform maps                     *
