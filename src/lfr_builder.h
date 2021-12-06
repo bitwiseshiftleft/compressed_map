@@ -40,6 +40,8 @@ typedef struct {
     lfr_relation_t **hashtable;
     uint8_t *data;
     uint8_t flags;
+    uint8_t salt_hint;
+    int max_tries;
 } lfr_builder_s, lfr_builder_t[1];
 
 /**
@@ -172,6 +174,18 @@ namespace LibFrayed {
             return lookup(v.data(), v.size());
         }
 
+        /** Look up an already-populated value by index */
+        inline lfr_relation_t &operator[] (size_t i) {
+            if (i>size()) throw std::out_of_range("LibFrayed::Builder[size_t]");
+            return builder->relations[i];
+        }
+
+        /** Look up an already-populated value by index */
+        inline const lfr_relation_t &operator[] (size_t i) const {
+            if (i>size()) throw std::out_of_range("LibFrayed::Builder[size_t]");
+            return builder->relations[i];
+        }
+
         /** Look up a value, returning NULL if not found, const version */
         inline const lfr_response_t *findPtr(const uint8_t *data, size_t size) const {
             if (builder->flags & LFR_NO_HASHTABLE) {
@@ -207,6 +221,45 @@ namespace LibFrayed {
         inline bool contains(const uint8_t *data, size_t size) const {
             return findPtr(data,size) != NULL;
         }
+
+        /** Iterators as key-value pairs */
+        template <class val> struct IteratorGen {
+            friend class LibFrayed::Builder;
+            using iterator_category = std::bidirectional_iterator_tag;
+            using difference_type   = ssize_t;
+            using value_type        = std::pair<std::vector<uint8_t>, val>;
+        private:
+            size_t i, max;
+            lfr_relation_t *rel;
+            IteratorGen(Builder &b, size_t i=0) : i(i), max(b.size()), rel(b.builder->relations) {}
+            IteratorGen(const Builder &b, size_t i=0) : i(i), max(b.size()), rel(b.builder->relations) {}
+
+        public:
+            value_type operator*() const {
+                if (i >= max) throw std::out_of_range("LibFrayed::Builder iterator");
+                std::vector<uint8_t> v(rel[i].keybytes);
+                v.assign(rel[i].key, rel[i].key+rel[i].keybytes);
+                return value_type(v,rel[i].value);
+            }
+
+            IteratorGen& operator++() { i++; return *this; } 
+            IteratorGen operator++(int) { IteratorGen tmp = *this; ++(*this); return tmp; }
+            IteratorGen& operator--() { i--; return *this; } 
+            IteratorGen operator--(int) { IteratorGen tmp = *this; --(*this); return tmp; }
+
+            friend bool operator== (const IteratorGen& a, const IteratorGen& b) { return a.i == b.i && a.rel == b.rel; };
+            friend bool operator!= (const IteratorGen& a, const IteratorGen& b) { return !(a==b); }; 
+
+
+        };
+        typedef IteratorGen<lfr_response_t &> iterator;
+        typedef IteratorGen<const lfr_response_t> const_iterator;
+        iterator begin() { return iterator(*this); }
+        const_iterator begin() const{ return const_iterator(*this); }
+        iterator end() { return iterator(*this,size()); }
+        const_iterator end() const { return const_iterator(*this,size()); }
+        const_iterator cbegin() const { return begin(); }
+        const_iterator cend() const { return end(); }
     };
 }
 

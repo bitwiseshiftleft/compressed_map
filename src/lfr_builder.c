@@ -30,6 +30,7 @@ void API_VIS lfr_builder_reset(lfr_builder_t builder) {
     }
 }
 
+#define LFR_DEFAULT_TRIES 20
 int API_VIS lfr_builder_init (
     lfr_builder_t builder,
     size_t capacity,
@@ -40,6 +41,8 @@ int API_VIS lfr_builder_init (
     builder->used = 0;
     builder->data_used = 0;
     builder->hash_capacity = 0;
+    builder->salt_hint = 0;
+    builder->max_tries = LFR_DEFAULT_TRIES;
     builder->flags = flags;
     builder->data = NULL;
     builder->relations = NULL;

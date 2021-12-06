@@ -5,15 +5,15 @@
  *
  * Non-uniform static functions.  These are more space-efficient
  * than uniform static functions if the distribution of values
- * differs significantly from uniform.
- *
- * They alse differ from the uniform case with respect to retries.
- * In the nonuniform case, if building fails, it simply returns EAGAIN
- * But the nonuniform case proceeds in several phases, each of which
- * requires building an lfr_uniform structure.  This would amplify the
- * probability of failure.  Therefore the nonuniform case stores the
- * entire input, so that it can re-choose salts and retry individual
- * phases if they fail.
+ * differs significantly from uniform.  They should be encodable
+ * to at most the Shannon entropy of the distribution, plus 11%,
+ * plus small amounts of padding and metadata.
+ * 
+ * Note well! This is a research-grade library, and not ready for
+ * production use.  Also, note that this library is not designed
+ * to store secret data.  In particular, it doesn't employ side-
+ * channel countermeasures, doesn't pin data to RAM, and doesn't
+ * erase it with memset_s or the like.
  */
 #ifndef __LFR_NONUNIFORM_H__
 #define __LFR_NONUNIFORM_H__

@@ -124,6 +124,7 @@ int main(int argc, const char **argv) {
     
     
     int successive_fails = 0;
+    uint64_t mask = (augmented==64) ? -(uint64_t)1 : ((uint64_t)1 << augmented)-1;
     for (long long blocks=blocks_min; blocks <= blocks_max && (bail <= 0 || successive_fails < bail); ) {
 
         size_t rows = _lfr_uniform_provision_max_rows(LFR_BLOCKSIZE*8*blocks);
@@ -147,18 +148,17 @@ int main(int argc, const char **argv) {
             record(&start, &tot_sample);
 
             for (unsigned i=0; i<rows; i++) {
-                builder.lookup(&keys[keylen*i], keylen) = values[i];
+                builder.lookup(&keys[keylen*i], keylen) = values[i] & mask;
             }
 
             LibFrayed::UniformMap map;
             try {
-                map = LibFrayed::UniformMap(builder, augmented, salt, nthreads);
+                map = LibFrayed::UniformMap(builder, zeroize ? augmented : -1, nthreads);
             } catch (LibFrayed::BuildFailedException &e) {
                 if (verbose) printf("Solve error\n");
             }
             record(&start, &tot_construct);
         
-            uint64_t mask = (augmented==64) ? -(uint64_t)1 : ((uint64_t)1 << augmented)-1;
             int allpass = 1;
             for (unsigned i=0; i<rows; i++) {
                 uint64_t ret = map.lookup(&keys[i*keylen], keylen);

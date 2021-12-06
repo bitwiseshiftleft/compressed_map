@@ -9,11 +9,12 @@
  * we support bit lengths <= 64 here; if you want to go larger
  * you probably want a perfect hashing scheme anyway.
  *
- * Building a static function may fail, with a few % probability.
- * If it fails due to EAGAIN, you may want to retry with a different
- * salt.  Construction fails with duplicate keys even if the values
- * are the same (i.e. if you created the builder using LFR_NO_HASHTABLE
- * and then inserted a duplicate).
+ * Building a static function may fail, with a few % probability
+ * In this case it will retry up to builder->max_tries times
+ * with different salts, and then fail, returning EAGAIN.  Note
+ * that if you have duplicate keys, even if they have the same
+ * values (e.g. by setting the builder flag LFR_NO_HASHTABLE)
+ * then this will fail every time.
  * 
  * Note well! This is a research-grade library, and not ready for
  * production use.  Also, note that this library is not designed
@@ -49,21 +50,20 @@ typedef struct {
  * @param map The map object.  On success, this function will initialize
  * the map and allocate memory for it.
  * @param builder The builder object.
- * @param value_bits The number of bits of the responses to use.
- * @param salt The salt to be used.
+ * @param value_bits The number of bits of the responses to use.  If -1, then set to max length of a required response.
  * @return 0 on success.
  * @return ENOMEM Not enough memory to solve / return the map.
  * @return EAGAIN The solution failed; either it has inconsistent values
  * or should be tried again with a different salt.
  */
-int lfr_uniform_build(lfr_uniform_map_t map, const lfr_builder_t builder, unsigned value_bits, lfr_salt_t salt);
+int lfr_uniform_build(lfr_uniform_map_t map, const lfr_builder_t builder, int value_bits);
 
 /** As lfr_uniform_build, but if the library was built with thread support, you
  * can set the number of threads.  Set to 0 for default.  If the library was not
  * built with thread support (by default it is not), then this call ignores
  * nthreads and always uses 1 thread.
  */
-int lfr_uniform_build_threaded(lfr_uniform_map_t map, const lfr_builder_t builder, unsigned value_bits, lfr_salt_t salt, int nthreads);
+int lfr_uniform_build_threaded(lfr_uniform_map_t map, const lfr_builder_t builder, int value_bits, int nthreads);
 
 /** Destroy a map object, and deallocate any memory used to create it. */
 void lfr_uniform_map_destroy(lfr_uniform_map_t map);
@@ -138,8 +138,8 @@ namespace LibFrayed {
         }
 
         /** Construct from a builder */
-        inline UniformMap(const LibFrayed::Builder &builder, int value_bits, lfr_salt_t salt, int nthreads=0) {
-            int ret = lfr_uniform_build_threaded(map,builder.builder,value_bits,salt,nthreads);
+        inline UniformMap(const LibFrayed::Builder &builder, int value_bits, int nthreads=0) {
+            int ret = lfr_uniform_build_threaded(map,builder.builder,value_bits,nthreads);
             if (ret == ENOMEM) {
                 throw std::bad_alloc();
             } else if (ret == EAGAIN) {

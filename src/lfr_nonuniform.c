@@ -17,7 +17,7 @@
 #define LFR_INTERVAL_BYTES (40/8)
 #define LFR_INTERVAL_SH (8*(sizeof(lfr_locator_t) - LFR_INTERVAL_BYTES))
 
-/* Outer header.  TODO: move to new serialize implementation */
+/* Outer header.  TODO: currently unused; move to new serialize implementation */
 #define LFR_HEADER_MY_VERSION 0
 #define LFR_FILE_SALT_BYTES 4
 #define LFR_BUCKET_PHASE_BYTES_BYTES  (32/8) // limit: ~32 billion items / bucket
@@ -282,10 +282,10 @@ static inline int constrained_this_phase (
 }
 
 #ifndef LFR_MAX_FAILURES
-#define LFR_MAX_FAILURES 100
+#define LFR_MAX_FAILURES 20
 #endif
 #ifndef LFR_PHASE_TRIES
-#define LFR_PHASE_TRIES 3
+#define LFR_PHASE_TRIES 5
 #endif
 
 /* Create a lfr_nonuniform. */
@@ -406,6 +406,13 @@ int API_VIS lfr_nonuniform_build (
 
         ret = lfr_builder_init(builder, nconstraints, 0, LFR_NO_COPY_DATA | LFR_NO_HASHTABLE); // no salt yet, set in iteration
         if (ret) { goto done; }
+        if (phase==0) {
+            if (( ret = getentropy(&builder->salt, sizeof(builder->salt)) )) goto done;
+        } else {
+            builder->salt = out->phases[phase-1]->salt;
+        }
+        builder->salt_hint = phase_salt[phase];
+        builder->max_tries = LFR_PHASE_TRIES;
 
         /* Build the uniform map using constrained items */
         for (size_t i=0; i<nrelns; i++) {
@@ -424,22 +431,7 @@ int API_VIS lfr_nonuniform_build (
         }
         
         lfr_uniform_map_destroy(out->phases[phase]);
-        int phase_ret;
-        do {
-            /* Try repeatedly to build it with different salts */
-            lfr_salt_t salt;
-            if (phase == 0) {
-                /* (re)randomize salt for the whole operation */
-                if (( ret = getentropy(&salt, sizeof(salt)) )) goto done;
-            } else {
-                salt = fmix64(out->phases[phase-1]->salt ^ phase_salt[phase]);
-            }
-            phase_ret = lfr_uniform_build(out->phases[phase], builder, phhi+1-phlo, salt);
-            if (phase_ret == EAGAIN) {
-                phase_salt[phase]++;
-                try++;
-            }
-        } while (phase_ret == EAGAIN && try < nphases + LFR_MAX_FAILURES && phase_salt[phase] <= LFR_PHASE_TRIES);
+        int phase_ret = lfr_uniform_build(out->phases[phase], builder, phhi+1-phlo);
         out->phases[phase]->_salt_hint = phase_salt[phase];
 
         if (phase_ret == 0 && phase < nphases-1) {

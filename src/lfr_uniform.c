@@ -765,20 +765,20 @@ void API_VIS lfr_uniform_map_destroy(lfr_uniform_map_t doomed) {
     memset(doomed, 0, sizeof(*doomed));
 }
 
-int API_VIS lfr_uniform_build (lfr_uniform_map_t output, const lfr_builder_t builder, unsigned value_bits, lfr_salt_t salt) {
-    return lfr_uniform_build_threaded(output,builder,value_bits,salt,0);
+int API_VIS lfr_uniform_build (lfr_uniform_map_t output, const lfr_builder_t builder, int value_bits) {
+    return lfr_uniform_build_threaded(output,builder,value_bits,0);
 }
 
 size_t API_VIS lfr_uniform_map_size(const lfr_uniform_map_t map) {
     return map->blocks * LFR_BLOCKSIZE * map->value_bits;
 }
 
-int API_VIS lfr_uniform_build_threaded (
+static int lfr_uniform_build_core (
     lfr_uniform_map_t output,
     const lfr_builder_t builder,
-    unsigned value_bits,
-    lfr_salt_t salt,
-    int nthreads
+    int value_bits,
+    int nthreads,
+    lfr_salt_t salt
 ) {
     int ret=0;
     size_t blocks = nblocks(builder->used);
@@ -786,7 +786,16 @@ int API_VIS lfr_uniform_build_threaded (
     group_t *groups = NULL;
     memset(output,0,sizeof(*output));
 
-    if (value_bits > 8*sizeof(lfr_response_t)) return -EINVAL;
+    if (value_bits < 0) {
+        lfr_response_t union_ = 0;
+        for (size_t i=0; i<builder->used; i++) {
+            union_ |= builder->relations[i].value;
+        }
+        value_bits = 1 + high_bit(union_);
+    } else if ((unsigned)value_bits > 8*sizeof(lfr_response_t)) {
+        return -EINVAL;
+    }
+    /* TODO: what if value_bits == 0? */
 
 #if LFR_THREADED
     size_t len = sizeof(nthreads);
@@ -853,7 +862,7 @@ int API_VIS lfr_uniform_build_threaded (
     for (size_t block=0; block<blocks; block++) {
         const tile_matrix_t *m = &groups[2*block+1].data;
         size_t tstride = m->stride, off = TILES_SPANNING(m->cols);
-        for (size_t which_augcol=0; which_augcol<value_bits; which_augcol++) {
+        for (int which_augcol=0; which_augcol<value_bits; which_augcol++) {
             for (size_t tile=0; tile<LFR_BLOCKSIZE*8/TILE_SIZE; tile++) {
                 tile_t out = m->data[tile*tstride + off + which_augcol/TILE_SIZE] >> (TILE_SIZE*(which_augcol % TILE_SIZE));
                 for (int b=0; b<TILE_SIZE/8; b++) {
@@ -866,6 +875,21 @@ int API_VIS lfr_uniform_build_threaded (
 done:
     lfr_builder_destroy_groups(groups, ngroups);
     if (ret != 0 && ret != ENOMEM) ret = EAGAIN;
+    return ret;
+}
+
+int API_VIS lfr_uniform_build_threaded (
+    lfr_uniform_map_t output,
+    const lfr_builder_t builder,
+    int value_bits,
+    int nthreads
+) {
+    int ret=1;
+    for (int i=0; i<builder->max_tries && ret; i++) {
+        lfr_salt_t salt = fmix64(builder->salt ^ (i+builder->salt_hint));
+        ret = lfr_uniform_build_core(output,builder,value_bits,nthreads,salt);
+        if (!ret) output->_salt_hint = i+builder->salt_hint;
+    }
     return ret;
 }
 
