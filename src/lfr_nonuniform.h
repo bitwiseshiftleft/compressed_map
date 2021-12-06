@@ -8,7 +8,7 @@
  * differs significantly from uniform.
  *
  * They alse differ from the uniform case with respect to retries.
- * In the nonuniform case, if building fails, it simply returns -EAGAIN
+ * In the nonuniform case, if building fails, it simply returns EAGAIN
  * But the nonuniform case proceeds in several phases, each of which
  * requires building an lfr_uniform structure.  This would amplify the
  * probability of failure.  Therefore the nonuniform case stores the
@@ -49,8 +49,8 @@ typedef struct {
  * @param map The map
  * @param builder The relation data
  * @return 0 on success.
- * @return -ENOMEM if we ran out of memory.
- * @return -EAGAIN if we tried and failed too many times.
+ * @return ENOMEM if we ran out of memory.
+ * @return EAGAIN if we tried and failed too many times.
  *
  * @todo This function assumes a dense encoding of the responses, e.g. they
  * are 0 .. 5.  It will take huge amounts of memory if one of the responses

@@ -285,7 +285,7 @@ static int lfr_uniform_build_setup (
     return 0;
 
 fail:
-    if (ret==0) ret = -ENOMEM;
+    if (ret==0) ret = ENOMEM;
     lfr_builder_destroy_groups(groups, ngroups);
     return ret;
 }
@@ -438,7 +438,7 @@ static int lfr_uniform_build_merge(group_t *result, group_t *left, group_t *righ
     size_t n_resolution = left->data.rows + right->data.rows - 2*result->rows;
     resolution_t *merged_resolution = result->row_resolution = calloc(n_resolution, sizeof*merged_resolution);
     if (n_resolution > 0 && merged_resolution == NULL) {
-        ret = -ENOMEM;
+        ret = ENOMEM;
         goto done;
     }
 
@@ -841,7 +841,7 @@ int API_VIS lfr_uniform_build_threaded (
     // Write output
     output->data = calloc(value_bits, blocks * LFR_BLOCKSIZE);
     if (output->data == NULL) {
-        ret = -ENOMEM;
+        ret = ENOMEM;
         goto done;
     }
     output->salt = salt;
@@ -865,7 +865,7 @@ int API_VIS lfr_uniform_build_threaded (
 
 done:
     lfr_builder_destroy_groups(groups, ngroups);
-    if (ret != 0 && ret != -ENOMEM) ret = -EAGAIN;
+    if (ret != 0 && ret != ENOMEM) ret = EAGAIN;
     return ret;
 }
 

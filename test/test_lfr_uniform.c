@@ -137,7 +137,7 @@ int main(int argc, const char **argv) {
         randomize(salt_as_bytes, seed, blocks<<32 ^ 0xFFFFFFFF, sizeof(salt_as_bytes));
         salt = le2ui(salt_as_bytes, sizeof(salt_as_bytes));
         if (( ret=lfr_builder_init(matrix, rows,0,LFR_NO_COPY_DATA) )) {
-            fprintf(stderr, "Init  error: %s\n", strerror(-ret));
+            fprintf(stderr, "Init  error: %s\n", strerror(ret));
             return ret;
         }
     
@@ -155,14 +155,14 @@ int main(int argc, const char **argv) {
                 ret = lfr_builder_insert(matrix,&keys[keylen*i],keylen,values[i]);
             }
             if (ret) {
-                printf("Insert error %d = %s\n", ret, strerror(-ret));
+                printf("Insert error %d = %s\n", ret, strerror(ret));
                 continue;
             }
 
             ret=lfr_uniform_build_threaded(map, matrix, augmented, salt, nthreads);
             record(&start, &tot_construct);
             if (ret) {
-                if (verbose) printf("Solve error: %d = %s\n", ret, strerror(-ret));
+                if (verbose) printf("Solve error: %d = %s\n", ret, strerror(ret));
                 continue;
             }
         

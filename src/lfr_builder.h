@@ -59,7 +59,7 @@ typedef struct {
  * (flags & LFR_NO_COPY_DATA).
  * @param flags Flags to the object.
  * @return 0 on success.
- * @return -ENOMEM if the requested data cannot be allocated.
+ * @return ENOMEM if the requested data cannot be allocated.
  */
 int lfr_builder_init (
     lfr_builder_t builder,
@@ -79,9 +79,9 @@ int lfr_builder_init (
  * @param keybytes Length of the key data in bytes.
  * @param value The value to associate to the key.
  * @return 0 on success.
- * @return -ENOMEM if the map is over the allocated capacity,
+ * @return ENOMEM if the map is over the allocated capacity,
  * and the size cannot be increased.
- * @return -EEXIST if the key already exists in the map, with
+ * @return EEXIST if the key already exists in the map, with
  * a different value.
  */
 int lfr_builder_insert (

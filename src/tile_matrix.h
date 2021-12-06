@@ -33,7 +33,7 @@ typedef struct {
 /**
  * Create a matrix with the given number of rows and columns.
  * The matrix is zeroized.
- * @return 0 on success, or -ENOMEM if the matrix is too large.
+ * @return 0 on success, or ENOMEM if the matrix is too large.
  */
 int tile_matrix_init(tile_matrix_t *matrix, size_t rows, size_t cols, size_t augcols);
 
@@ -88,7 +88,7 @@ void tile_matrix_zeroize_cols(tile_matrix_t *a, size_t cola, size_t ncols);
 void tile_matrix_xor_augdata(tile_matrix_t *a, const tile_matrix_t *b);
 
 /** Resize the matrix by changing its number of rows (using realloc).
- * @return 0 on success, or -ENOMEM if out of memory.
+ * @return 0 on success, or ENOMEM if out of memory.
  */
 int tile_matrix_change_nrows(tile_matrix_t *matrix, size_t new_rows);
 
@@ -115,7 +115,7 @@ size_t tile_matrix_rref(tile_matrix_t *a, bitset_t column_is_in_echelon);
 
 /**
  * Echelonize the matrix a, then initialize sys to be its systematic form.
- * @return 0 on success; -1 or -ENOMEM on error.
+ * @return 0 on success; -1 or ENOMEM on error.
  */
 int tile_matrix_systematic_form(tile_matrix_systematic_t *sys, tile_matrix_t *a);
 
@@ -124,7 +124,7 @@ void tile_matrix_systematic_destroy(tile_matrix_systematic_t *sys);
 
 /**
  * Create a trivial systematic matrix, with no columns in echelon.
- * @return 0 on success; -ENOMEM on error.
+ * @return 0 on success; ENOMEM on error.
  */
 int tile_matrix_trivial_systematic_form(tile_matrix_systematic_t *sys, size_t rows);
 

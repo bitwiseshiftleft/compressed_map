@@ -435,11 +435,11 @@ int API_VIS lfr_nonuniform_build (
                 salt = fmix64(out->phases[phase-1]->salt ^ phase_salt[phase]);
             }
             phase_ret = lfr_uniform_build(out->phases[phase], builder, phhi+1-phlo, salt);
-            if (phase_ret == -EAGAIN) {
+            if (phase_ret == EAGAIN) {
                 phase_salt[phase]++;
                 try++;
             }
-        } while (phase_ret == -EAGAIN && try < nphases + LFR_MAX_FAILURES && phase_salt[phase] <= LFR_PHASE_TRIES);
+        } while (phase_ret == EAGAIN && try < nphases + LFR_MAX_FAILURES && phase_salt[phase] <= LFR_PHASE_TRIES);
         out->phases[phase]->_salt_hint = phase_salt[phase];
 
         if (phase_ret == 0 && phase < nphases-1) {
@@ -469,11 +469,11 @@ int API_VIS lfr_nonuniform_build (
         }
     }
     
-    if (phase < nphases) ret = -EAGAIN;
+    if (phase < nphases) ret = EAGAIN;
     goto done;
 
 alloc_failed:
-    ret = -ENOMEM;
+    ret = ENOMEM;
 
 done:
     /* Clean up all allocations */

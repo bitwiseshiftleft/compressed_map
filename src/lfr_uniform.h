@@ -52,8 +52,8 @@ typedef struct {
  * @param value_bits The number of bits of the responses to use.
  * @param salt The salt to be used.
  * @return 0 on success.
- * @return -ENOMEM Not enough memory to solve / return the map.
- * @return -EAGAIN The solution failed; either it has inconsistent values
+ * @return ENOMEM Not enough memory to solve / return the map.
+ * @return EAGAIN The solution failed; either it has inconsistent values
  * or should be tried again with a different salt.
  */
 int lfr_uniform_build(lfr_uniform_map_t map, const lfr_builder_t builder, unsigned value_bits, lfr_salt_t salt);

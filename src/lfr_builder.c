@@ -56,7 +56,7 @@ int API_VIS lfr_builder_init (
     builder->relations = calloc(capacity, sizeof(*builder->relations));  
     if (builder->relations == NULL) {
         lfr_builder_destroy(builder);
-        return -ENOMEM;
+        return ENOMEM;
     }
 
     /* Allocate the hashtable if required */
@@ -65,7 +65,7 @@ int API_VIS lfr_builder_init (
         builder->hashtable = malloc(hash_capacity * sizeof(*builder->hashtable));
         if (builder->hashtable == NULL) {
             lfr_builder_destroy(builder);
-            return -ENOMEM;
+            return ENOMEM;
         }
         for (size_t i=0; i<hash_capacity; i++) {
             builder->hashtable[i] = NULL;
@@ -77,7 +77,7 @@ int API_VIS lfr_builder_init (
         builder->data = malloc(data_capacity);
         if (builder->data == NULL) {
             lfr_builder_destroy(builder);
-            return -ENOMEM;
+            return ENOMEM;
         }
     }
     
@@ -228,9 +228,9 @@ int API_VIS lfr_builder_insert (
     lfr_response_t *found = lfr_builder_lookup_core(builder,key,keybytes,&hash);
     if (found == NULL) {
         found = lfr_builder_really_insert(builder,key,keybytes,value,hash);
-        if (found == NULL) return -ENOMEM;
+        if (found == NULL) return ENOMEM;
     } else if (*found != value) {
-        return -EEXIST;
+        return EEXIST;
     }
     return 0;
 }

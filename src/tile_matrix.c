@@ -88,7 +88,7 @@ int tile_matrix_init(tile_matrix_t *matrix, size_t rows, size_t cols, size_t aug
         return 0;
     } else {
         memset(matrix,0,sizeof(*matrix));
-        return -ENOMEM;
+        return ENOMEM;
     }
 }
 
@@ -100,7 +100,7 @@ int tile_matrix_change_nrows(tile_matrix_t *matrix, size_t new_rows) {
         matrix->data = realloc(matrix->data,sizeof(tile_t)*trows*matrix->stride);
         if (matrix->data == NULL) {
             tile_matrix_destroy(matrix);
-            return -ENOMEM;
+            return ENOMEM;
         }
         size_t new_rows_up = round_up(new_rows, TILE_SIZE);
         tile_matrix_zeroize_rows(matrix, matrix->rows, new_rows_up-matrix->rows);
@@ -646,7 +646,7 @@ int tile_matrix_systematic_form(tile_matrix_systematic_t *sys, tile_matrix_t *a)
     sys->column_is_in_echelon = bitset_init(a->cols);
     if (!sys->column_is_in_echelon) {
         memset(sys,0,sizeof(*sys));
-        return -ENOMEM;
+        return ENOMEM;
     }
 
     size_t rank = tile_matrix_rref(a, sys->column_is_in_echelon);
@@ -661,7 +661,7 @@ int tile_matrix_systematic_form(tile_matrix_systematic_t *sys, tile_matrix_t *a)
         /* No memeory */
         bitset_destroy(sys->column_is_in_echelon);
         memset(sys,0,sizeof(*sys));
-        return -ENOMEM;
+        return ENOMEM;
     }
 
     /* Copy the non-echelon part of the columns */
@@ -695,7 +695,7 @@ int tile_matrix_trivial_systematic_form(tile_matrix_systematic_t *sys, size_t ro
     memset(sys,0,sizeof(*sys));
     sys->column_is_in_echelon = bitset_init(rows);
     if (sys->column_is_in_echelon == NULL) {
-        return -ENOMEM;
+        return ENOMEM;
     }
     sys->rhs.cols = rows;
     return 0;
