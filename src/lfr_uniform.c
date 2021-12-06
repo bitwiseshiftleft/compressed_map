@@ -769,7 +769,7 @@ int API_VIS lfr_uniform_build (lfr_uniform_map_t output, const lfr_builder_t bui
     return lfr_uniform_build_threaded(output,builder,value_bits,0);
 }
 
-size_t API_VIS lfr_uniform_map_size(const lfr_uniform_map_t map) {
+size_t API_VIS _lfr_uniform_map_vector_size(const lfr_uniform_map_t map) {
     return map->blocks * LFR_BLOCKSIZE * map->value_bits;
 }
 
@@ -925,4 +925,66 @@ uint64_t API_VIS lfr_uniform_query (
         ret ^= (uint64_t)parity(dot) << obit;
     }
     return ret & mask;
+}
+
+typedef struct {
+    uint8_t salt[sizeof(lfr_salt_t)];
+    uint8_t blocks[5];
+    uint8_t value_bits;
+} __attribute__((packed)) lfr_uniform_map_header_t;
+
+size_t API_VIS lfr_uniform_map_serial_size(const lfr_uniform_map_t map) {
+    return sizeof(lfr_uniform_map_header_t) + _lfr_uniform_map_vector_size(map);
+}
+
+int API_VIS lfr_uniform_map_serialize(uint8_t *out, const lfr_uniform_map_t map) {
+    lfr_uniform_map_header_t *header = (lfr_uniform_map_header_t*) out;
+    
+    int ret = ui2le(header->salt, sizeof(header->salt), map->salt);
+    if (ret) return ret;
+    ret = ui2le(header->blocks, sizeof(header->blocks), map->blocks);
+    if (ret) return ret;
+    header->value_bits = map->value_bits;
+    
+    memcpy(out + sizeof(*header), map->data, _lfr_uniform_map_vector_size(map));
+    return 0;
+}
+
+int API_VIS lfr_uniform_map_deserialize (
+    lfr_uniform_map_t map,
+    const uint8_t *data,
+    size_t data_size,
+    uint8_t flags
+) {
+    memset(map,0,sizeof(*map));
+
+    if (data_size < sizeof(lfr_uniform_map_header_t)) return EINVAL;
+    const lfr_uniform_map_header_t *header = (const lfr_uniform_map_header_t*) data;
+    data_size -= sizeof(*header);
+    data += sizeof(*header);
+
+    uint64_t value_bits = header->value_bits;
+    if (value_bits > 8*sizeof(lfr_response_t)) return EINVAL;
+
+    uint64_t blocks = le2ui(header->blocks, sizeof(header->blocks));
+    /* Check can't overflow because it's 1 byte * 5 bytes * small sizeof */
+    if (data_size != value_bits * blocks * LFR_BLOCKSIZE) return EINVAL;
+
+    map->blocks = blocks;
+    map->value_bits = value_bits;
+    if (flags & LFR_NO_COPY_DATA) {
+        map->data_is_mine = 0;
+        map->data = (uint8_t*)data;
+    } else {
+        map->data = (uint8_t*)malloc(data_size);
+        if (map->data == NULL) {
+            lfr_uniform_map_destroy(map);
+            return ENOMEM;
+        }
+        memcpy(map->data, data, data_size);
+        map->data_is_mine = 1;
+    }
+    map->salt = le2ui(header->salt, sizeof(header->salt));
+    map->_salt_hint = 0;
+    return 0;
 }

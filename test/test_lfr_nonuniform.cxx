@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
     
     size_t size = 0;
     for (int i=0; i<map.map->nphases; i++) {
-        size += lfr_uniform_map_size(map.map->phases[i]);
+        size += _lfr_uniform_map_vector_size(map.map->phases[i]);
     }
     double ratio = entropy ? size / entropy : INFINITY;
     printf("size = %lld bytes, shannon = %d bytes, ratio = %0.3f\n", (long long) size, (int)entropy, ratio);

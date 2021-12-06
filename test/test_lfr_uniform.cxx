@@ -141,8 +141,9 @@ int main(int argc, const char **argv) {
         LibFrayed::Builder builder(rows,0,LFR_NO_COPY_DATA);
         builder.builder->max_tries = tries;
     
-        double start, tot_construct=0, tot_query=0, tot_sample=0;
+        double start, tot_construct=0, tot_query=0, tot_sample=0, ignored=0;
         size_t passes=0;
+        bool did_ser_test=false;
         for (unsigned t=0; t<ntrials; t++) {
             start = now();
 
@@ -155,13 +156,21 @@ int main(int argc, const char **argv) {
                 builder.lookup(&keys[keylen*i], keylen) = values[i] & mask;
             }
 
+            bool success = false;
             LibFrayed::UniformMap map;
             try {
                 map = LibFrayed::UniformMap(builder, zeroize ? augmented : -1, nthreads);
+                success = true;
             } catch (LibFrayed::BuildFailedException &e) {
                 if (verbose) printf("Solve error\n");
             }
             record(&start, &tot_construct);
+
+            if (success && !did_ser_test) {
+                map = LibFrayed::UniformMap(map.serialize());
+                did_ser_test = true;
+            }
+            record(&start,&ignored);
         
             int allpass = 1;
             for (unsigned i=0; i<rows; i++) {

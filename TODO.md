@@ -10,6 +10,7 @@
 * Test builder hash table impl (using C++?)
 * Test the C++ interface better.
 * More tests around builder expanding memory.
+* Test various things with zero allowed tries, zero items, zero value bits, etc.
 * Doxyfile
 
 # Longer term

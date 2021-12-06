@@ -68,9 +68,6 @@ int lfr_uniform_build_threaded(lfr_uniform_map_t map, const lfr_builder_t builde
 /** Destroy a map object, and deallocate any memory used to create it. */
 void lfr_uniform_map_destroy(lfr_uniform_map_t map);
 
-/** Return the number of bytes in the uniform map's data section. */
-size_t lfr_uniform_map_size(const lfr_uniform_map_t map);
-
 /** Query a uniform map.  If the key was used when building
  * the map, then the same value will be returned.
  */
@@ -81,8 +78,33 @@ lfr_response_t lfr_uniform_query (
 );
 
 /*****************************************************************
+ *                         Serialization                         *
+ *****************************************************************/
+
+/** Return the number of bytes required to serialize the map */
+size_t lfr_uniform_map_serial_size(const lfr_uniform_map_t map);
+
+/** Serialize the map.  The output should be lfr_uniform_map_ser_size bytes long.
+ * @return 0 on success.
+ * @return nonzero on failure.  This function shouldn't fail, but maybe would
+ * fail with an excessively large map.
+ */
+int lfr_uniform_map_serialize(uint8_t *out, const lfr_uniform_map_t map);
+
+/**
+ * Deserialize a map.  If flags & LFR_NO_COPY_DATA, then point to the data; otherwise copy it.
+ * @return 0 on success.
+ * @return nonzero if the map is corrupt.
+ */
+int lfr_uniform_map_deserialize(lfr_uniform_map_t map, const uint8_t *data, size_t data_size, uint8_t flags);
+
+
+/*****************************************************************
  *                     Testing and debugging                     *
  *****************************************************************/
+
+/** Return the number of bytes in the uniform map's data section. */
+size_t _lfr_uniform_map_vector_size(const lfr_uniform_map_t map);
 
 /**
  * Return the number of columns required for the given number of rows.
@@ -123,10 +145,24 @@ namespace LibFrayed {
         /** Empty constructor */
         inline UniformMap() { memset(map,0,sizeof(map)); }
 
+        inline UniformMap(const LibFrayed::UniformMap &other) = delete;
+
         /** Move constructor */
         inline UniformMap(LibFrayed::UniformMap &&other) {
             map[0] = other.map[0];
             memset(other.map,0,sizeof(other.map));
+        }
+
+        /** Deserialize from vector */
+        inline UniformMap(const std::vector<uint8_t> &other) {
+            int ret = lfr_uniform_map_deserialize(map, other.data(), other.size(), 0);
+            if (ret) throw std::runtime_error("corrupt LibFrayed::UniformMap");
+        }
+
+        /** Deserialize from vector */
+        inline UniformMap(const uint8_t *data, size_t data_size, uint8_t flags=0) {
+            int ret = lfr_uniform_map_deserialize(map, data, data_size, flags);
+            if (ret) throw std::runtime_error("corrupt LibFrayed::UniformMap");
         }
 
         /** Move assignment */
@@ -163,6 +199,22 @@ namespace LibFrayed {
         /** Lookup */
         inline lfr_response_t operator[] (const std::vector<uint8_t> &v) const {
             return lookup(v);
+        }
+
+        /** Get serial size */
+        inline size_t serial_size() const { return lfr_uniform_map_serial_size(map); }
+        
+        /** Serialize */
+        inline void serialize_into(uint8_t *out) const {
+            int ret = lfr_uniform_map_serialize(out,map);
+            if (ret != 0) throw std::runtime_error("LibFrayed::uniform_map::serialize_into failed");
+        }
+
+        inline std::vector<uint8_t> serialize() const {
+            size_t sz = serial_size();
+            std::vector<uint8_t> ret(sz);
+            serialize_into(ret.data());
+            return ret;
         }
     };
 }
