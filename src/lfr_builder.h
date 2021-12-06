@@ -105,6 +105,24 @@ lfr_response_t *lfr_builder_lookup (
     size_t keybytes
 );
 
+/**
+ * Lookup a key in the builder's hashtable.  If the item isn't
+ * found, or if the builder was created with the LFR_NO_HASHTABLE
+ * flag, insert value_if_not_found.
+ * @param builder The uniform map-builder object.
+ * @param key Pointer to the key data.
+ * @param keybytes Length of the key data in bytes.
+ * @param value_if_not_found Length of the key data in bytes.
+ * @return A pointer to the value.
+ * @return NULL if out of memory.
+ */
+lfr_response_t *lfr_builder_lookup_insert (
+    lfr_builder_t builder,
+    const uint8_t *key,
+    size_t keybytes,
+    lfr_response_t value_if_not_found
+);
+
 /** Clear any relations in the map. */
 void lfr_builder_reset(lfr_builder_t builder);
 
@@ -112,7 +130,7 @@ void lfr_builder_reset(lfr_builder_t builder);
 void lfr_builder_destroy(lfr_builder_t builder);
 
 #ifdef __cplusplus
-}; // extern "C"
-#endif
+}; /* extern "C" */
+#endif /* __cplusplus */
 
 #endif /* __LFR_BUILDER_H__ */

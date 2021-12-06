@@ -84,7 +84,7 @@ int API_VIS lfr_builder_init (
     return 0;
 }
 
-static int lfr_builder_really_insert (
+static lfr_response_t *lfr_builder_really_insert (
     lfr_builder_t builder,
     const uint8_t *key,
     size_t keybytes,
@@ -104,12 +104,12 @@ static int lfr_builder_really_insert (
                 * the hash table to adjust the pointers.
                 */
             lfr_relation_t **newh = realloc(builder->hashtable, hash_capacity * sizeof(*builder->hashtable));
-            if (newh == NULL) return -ENOMEM;
+            if (newh == NULL) return NULL;
             builder->hashtable = newh;
         }
 
         lfr_relation_t *new = realloc(builder->relations, new_capacity * sizeof(*new));
-        if (new == NULL) return -ENOMEM;
+        if (new == NULL) return NULL;
         builder->relations = new;
         builder->capacity = new_capacity;
 
@@ -140,13 +140,13 @@ static int lfr_builder_really_insert (
 
     /* Copy the data if applicable */
     if (!(builder->flags & LFR_NO_COPY_DATA)) {
-        if (keybytes + builder->data_used < keybytes) return -ENOMEM; // overflow
+        if (keybytes + builder->data_used < keybytes) return NULL; // overflow
         if (keybytes + builder->data_used > builder->data_capacity) {
             // Reallocate
             size_t new_capacity = 2*builder->data_capacity + keybytes + DATA_CAPACITY_STEP;
-            if (new_capacity < keybytes + builder->data_used) return -ENOMEM; // overflow
+            if (new_capacity < keybytes + builder->data_used) return NULL; // overflow
             uint8_t *new = realloc(builder->data, new_capacity);
-            if (new == NULL) return -ENOMEM;
+            if (new == NULL) return NULL;
 
             // patch up the pointers
             for (size_t i=0; i<builder->used; i++) {
@@ -172,7 +172,7 @@ static int lfr_builder_really_insert (
         /* Insert also in hashtable */
         builder->hashtable[hash] = &builder->relations[row];
     }
-    return 0;
+    return &builder->relations[row].value;
 }
 
 static lfr_response_t *lfr_builder_lookup_core (
@@ -204,6 +204,20 @@ lfr_response_t *API_VIS lfr_builder_lookup (
     return lfr_builder_lookup_core(builder,key,keybytes,NULL);
 }
 
+lfr_response_t *API_VIS lfr_builder_lookup_insert (
+    lfr_builder_t builder,
+    const uint8_t *key,
+    size_t keybytes,
+    lfr_response_t value
+) {
+    uint64_t hash;
+    lfr_response_t *found = lfr_builder_lookup_core(builder,key,keybytes,&hash);
+    if (found == NULL) {
+        found = lfr_builder_really_insert(builder,key,keybytes,value,hash);
+    }
+    return found;
+}
+
 int API_VIS lfr_builder_insert (
     lfr_builder_t builder,
     const uint8_t *key,
@@ -213,7 +227,8 @@ int API_VIS lfr_builder_insert (
     uint64_t hash;
     lfr_response_t *found = lfr_builder_lookup_core(builder,key,keybytes,&hash);
     if (found == NULL) {
-        lfr_builder_really_insert(builder,key,keybytes,value,hash);
+        found = lfr_builder_really_insert(builder,key,keybytes,value,hash);
+        if (found == NULL) return -ENOMEM;
     } else if (*found != value) {
         return -EEXIST;
     }
