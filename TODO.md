@@ -5,9 +5,11 @@
 * File-handling / ser / deser API.
 * Demo: CRL compression.
 * FIXME BUG: nonuniform maps don't work if an item has zero population.
-* Speed up builder hash table impl
+* Speed up builder hash table impl?
+* Should we just forget murmur3/siphash and go with SHA256, hoping for HW acceleration?
 * Test builder hash table impl (using C++?)
 * Test the C++ interface better.
+* More tests around builder expanding memory.
 * Doxyfile
 
 # Longer term

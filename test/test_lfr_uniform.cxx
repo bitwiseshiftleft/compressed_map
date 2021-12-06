@@ -43,7 +43,8 @@ void randomize(uint8_t *x, uint64_t seed, uint64_t nonce, size_t length) {
 void usage(const char *fail, const char *me, int exitcode) {
     if (fail) fprintf(stderr, "Unknown argument: %s\n", fail);
     fprintf(stderr,"Usage: %s [--deficit 8] [--threads 0] [--augmented 8] [--blocks 2||--rows 32] [--blocks-max 0]\n", me);
-    fprintf(stderr,"  [--blocks-step 10] [--exp 1.1] [--ntrials 100] [--verbose] [--seed 2] [--bail 3] [--keylen 8] [--zeroize]\n");
+    fprintf(stderr,"  [--blocks-step 10] [--exp 1.1] [--ntrials 100] [--verbose] [--seed 2] [--bail 3]\n");
+    fprintf(stderr,"  [--tries 1] [--keylen 8] [--zeroize]\n");
     exit(exitcode);
 }
 
@@ -51,7 +52,7 @@ int main(int argc, const char **argv) {
     long long blocks_min=2, blocks_max=-1, blocks_step=10, augmented=8, ntrials=100;
     uint64_t seed = 2;
     double ratio = 1.1;
-    int is_exponential = 0, verbose=0, bail=3, nthreads=0, zeroize=0;
+    int is_exponential = 0, verbose=0, bail=3, nthreads=0, zeroize=0, tries=1;
     
     size_t keylen = 8;
         
@@ -78,6 +79,8 @@ int main(int argc, const char **argv) {
             is_exponential = 0;
         } else if (!strcmp(arg,"--keylen") && i<argc-1) {
             keylen = atoll(argv[++i]);
+        } else if (!strcmp(arg,"--tries") && i<argc-1) {
+            tries = atoll(argv[++i]);
         } else if (!strcmp(arg,"--zeroize")) {
             zeroize = 1;
         } else if (!strcmp(arg,"--exp")) {
@@ -136,6 +139,7 @@ int main(int argc, const char **argv) {
         randomize(salt_as_bytes, seed, blocks<<32 ^ 0xFFFFFFFF, sizeof(salt_as_bytes));
         salt = le2ui(salt_as_bytes, sizeof(salt_as_bytes));
         LibFrayed::Builder builder(rows,0,LFR_NO_COPY_DATA);
+        builder.builder->max_tries = tries;
     
         double start, tot_construct=0, tot_query=0, tot_sample=0;
         size_t passes=0;

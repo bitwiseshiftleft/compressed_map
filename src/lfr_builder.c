@@ -127,15 +127,15 @@ static lfr_response_t *lfr_builder_really_insert (
                     builder->relations[i].keybytes,
                     builder->salt
                 ).low64;
-                a_hash %= builder->hash_capacity;
-                for (; builder->hashtable[a_hash] != NULL; a_hash = (a_hash+1) % builder->hash_capacity) {}
+                a_hash %= hash_capacity;
+                for (; builder->hashtable[a_hash] != NULL; a_hash = (a_hash+1) % hash_capacity) {}
                 builder->hashtable[a_hash] = &builder->relations[i];
             }
 
             /* Refind the insertion point */
             hash = lfr_hash(key,keybytes,builder->salt).low64;
-            hash %= builder->hash_capacity;
-            for (; builder->hashtable[hash] != NULL; hash = (hash+1) % builder->hash_capacity) {}
+            hash %= hash_capacity;
+            for (; builder->hashtable[hash] != NULL; hash = (hash+1) % hash_capacity) {}
 
             builder->hash_capacity = hash_capacity;
         }
@@ -184,10 +184,15 @@ static lfr_response_t *lfr_builder_lookup_core (
     size_t keybytes,
     uint64_t *hash_p /* Return to save time */
 ) {
+
     /* Look up in the hashtable */
     lfr_relation_t *ret = NULL;
     uint64_t hash=0;
     if (!(builder->flags & LFR_NO_HASHTABLE)) {
+        if (builder->hash_capacity == 0) {
+            *hash_p = 0;
+            return NULL;
+        }
         hash = lfr_hash(key,keybytes,builder->salt).low64;
         hash %= builder->hash_capacity;
         for (; (ret = builder->hashtable[hash]) != NULL; hash = (hash+1) % builder->hash_capacity) {
