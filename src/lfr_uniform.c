@@ -884,7 +884,7 @@ int API_VIS lfr_uniform_build_threaded (
     int value_bits,
     int nthreads
 ) {
-    int ret=1;
+    int ret=EAGAIN;
     for (int i=0; i<builder->max_tries && ret; i++) {
         lfr_salt_t salt = fmix64(builder->salt ^ (i+builder->salt_hint));
         ret = lfr_uniform_build_core(output,builder,value_bits,nthreads,salt);

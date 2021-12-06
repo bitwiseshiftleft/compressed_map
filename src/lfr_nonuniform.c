@@ -281,9 +281,6 @@ static inline int constrained_this_phase (
     }
 }
 
-#ifndef LFR_MAX_FAILURES
-#define LFR_MAX_FAILURES 20
-#endif
 #ifndef LFR_PHASE_TRIES
 #define LFR_PHASE_TRIES 5
 #endif
@@ -358,7 +355,7 @@ int API_VIS lfr_nonuniform_build (
     // Search tree for suitable salts
     phase_salt[0] = 0;
     int phase=0;
-    for (int try=0; phase >= 0 && phase < nphases && try < nphases + LFR_MAX_FAILURES; try++) {
+    for (int try=0; phase >= 0 && phase < nphases && try < nphases + builder->max_tries; try++) {
         phase_salt[phase]++;
 
         // Search heuristic: If we've retried this phase several times without success,
