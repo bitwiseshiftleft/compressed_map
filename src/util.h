@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <string.h> /* for memcpy */
 #include <sys/types.h> /* for ssize_t */
+#include "siphash.h"
 
 /* Builtin checking */
 #ifndef LFR_USE_BUILTINS
@@ -175,7 +176,7 @@ static inline uint64_t fmix64(uint64_t k) {
   return k;
 }
 
-/** Hash utility: murmur3 hash result */
+/** Hash utility: murmur3 / siphash hash result */
 typedef struct { uint64_t low64, high64; } hash_result_t;
 
 /** Hash utility: Murmur3 by Austin Appleby, but with its seed extended to 64 bits.
@@ -212,6 +213,28 @@ static hash_result_t UNUSED murmur3_x64_128_extended_seed (
 
     hash_result_t ret = { h1, h2 };
     return ret;
+}
+
+static inline hash_result_t UNUSED siphash_wrapper (
+    const uint8_t *data, size_t len, uint64_t seed
+) {
+    uint8_t key[16];
+    ui2le(key,8,seed);
+    ui2le(&key[8],8,seed);
+    uint8_t result[16];
+    siphash(data,len,key,result,sizeof(result));
+    hash_result_t hr = {le2ui(result,8), le2ui(&result[8],8)};
+    return hr;
+}
+
+static inline hash_result_t UNUSED lfr_hash (
+    const uint8_t *data, size_t len, uint64_t seed
+) {
+#if LFR_USE_MURMUR3
+    return murmur3_x64_128_extended_seed(data,len,seed);
+#else
+    return siphash_wrapper(data,len,seed);
+#endif
 }
 
 #endif // __LFR_UTIL_H__

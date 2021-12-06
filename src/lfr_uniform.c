@@ -124,7 +124,7 @@ _lfr_hash_result_t _lfr_uniform_hash (
     s += (-s)%8;
     uint8_t hash[s];
     
-    hash_result_t data = murmur3_x64_128_extended_seed(key, key_length, salt);
+    hash_result_t data = lfr_hash(key, key_length, salt);
     _lfr_uniform_sample_block_positions(result.block_positions,nblocks,(uint32_t)data.high64,data.high64>>32);
     result.augmented = data.low64;
 

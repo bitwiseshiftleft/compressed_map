@@ -9,6 +9,7 @@
 * Should uniform maps support automatic retries?
 * Speed up builder hash table impl
 * Test builder hash table impl (using C++?)
+* Move salt setting, retries etc to builder
 * Doxyfile
 * C++ interface
 

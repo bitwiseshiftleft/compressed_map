@@ -119,7 +119,7 @@ static int lfr_builder_really_insert (
                 builder->hashtable[i] = NULL;
             }
             for (size_t i=0; i<builder->used; i++) {
-                uint64_t a_hash = murmur3_x64_128_extended_seed(
+                uint64_t a_hash = lfr_hash(
                     builder->relations[i].key,
                     builder->relations[i].keybytes,
                     builder->salt
@@ -130,7 +130,7 @@ static int lfr_builder_really_insert (
             }
 
             /* Refind the insertion point */
-            hash = murmur3_x64_128_extended_seed(key,keybytes,builder->salt).low64;
+            hash = lfr_hash(key,keybytes,builder->salt).low64;
             hash %= builder->hash_capacity;
             for (; builder->hashtable[hash] != NULL; hash = (hash+1) % builder->hash_capacity) {}
 
@@ -185,7 +185,7 @@ static lfr_response_t *lfr_builder_lookup_core (
     lfr_relation_t *ret = NULL;
     uint64_t hash=0;
     if (!(builder->flags & LFR_NO_HASHTABLE)) {
-        hash = murmur3_x64_128_extended_seed(key,keybytes,builder->salt).low64;
+        hash = lfr_hash(key,keybytes,builder->salt).low64;
         hash %= builder->hash_capacity;
         for (; (ret = builder->hashtable[hash]) != NULL; hash = (hash+1) % builder->hash_capacity) {
             if (ret->keybytes == keybytes && !bcmp(ret->key,key,keybytes)) break;

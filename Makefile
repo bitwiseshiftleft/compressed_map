@@ -39,7 +39,7 @@ build/%.o: src/%.c src/*.h Makefile build/timestamp
 build/%.o: test/%.c src/*.h Makefile build/timestamp
 	$(CC) $(CFLAGS) -Isrc -c -o $@ $<
 
-build/libfrayedribbon.dylib: build/lfr_uniform.o build/tile_matrix.o build/lfr_nonuniform.o build/lfr_builder.o
+build/libfrayedribbon.dylib: build/lfr_uniform.o build/tile_matrix.o build/lfr_nonuniform.o build/lfr_builder.o build/siphash.o
 	$(CC) $(LDFLAGS) -Wl,-dead_strip -o $@ -shared -dynamic $^
 	# strip -x $@
 

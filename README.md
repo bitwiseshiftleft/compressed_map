@@ -2,7 +2,8 @@
 
 This research-grade library aims to implement space-efficient static functions, with a performance profile suitable for evolutions of [CRLite](https://blog.mozilla.org/security/2020/01/09/crlite-part-2-end-to-end-design/).  Of course, it's probably applicable to other domains.
 
-Written by Mike Hamburg.  © 2020-2021 Rambus Inc, MIT licensed. 
+Written by Mike Hamburg.  © 2020-2021 Rambus Inc, MIT licensed.  This library incorporates public-domain SipHash code by Jean-Philippe Aumasson
+and Daniel J. Bernstein; and code based on public-domain Murmur3 code by Peter Scott.
 
 This is a research-grade implementation.  Don't deploy it in production.  Also I'm just a cryptographer moonlighting as a data structures researcher.  It's entirely likely that someone will make a better filter next year.
 
