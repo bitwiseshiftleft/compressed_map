@@ -51,7 +51,7 @@ int main(int argc, const char **argv) {
     long long blocks_min=2, blocks_max=-1, blocks_step=10, augmented=8, ntrials=100;
     uint64_t seed = 2;
     double ratio = 1.1;
-    int is_exponential = 0, ret, verbose=0, bail=3, nthreads=0, zeroize=0;
+    int is_exponential = 0, verbose=0, bail=3, nthreads=0, zeroize=0;
     
     size_t keylen = 8;
         
@@ -105,8 +105,8 @@ int main(int argc, const char **argv) {
     }
     unsigned rows_max = _lfr_uniform_provision_max_rows(LFR_BLOCKSIZE*8*blocks_max);
 
-    uint8_t  *keys   = malloc(rows_max*keylen);
-    uint64_t *values = calloc(rows_max, sizeof(*values));
+    uint8_t  *keys   = (uint8_t*)malloc(rows_max*keylen);
+    lfr_response_t *values = (lfr_response_t*)calloc(rows_max, sizeof(*values));
     if (keys == NULL || values == NULL) {
         printf("Can't allocate %lld key value pairs\n", (long long)rows_max);
         return 1;
@@ -122,54 +122,46 @@ int main(int argc, const char **argv) {
         return 1;
     }
     
-    lfr_uniform_map_t map;
-    lfr_builder_t matrix;
     
     int successive_fails = 0;
     for (long long blocks=blocks_min; blocks <= blocks_max && (bail <= 0 || successive_fails < bail); ) {
 
         size_t rows = _lfr_uniform_provision_max_rows(LFR_BLOCKSIZE*8*blocks);
-        if (rows == 0) goto norows;
+        double us_per_query = INFINITY, sps = INFINITY, us_per_build = INFINITY, ns_per_sample = INFINITY;
 
         size_t row_deficit = LFR_BLOCKSIZE*8*blocks - rows;
         lfr_salt_t salt;
         uint8_t salt_as_bytes[sizeof(salt)];
         randomize(salt_as_bytes, seed, blocks<<32 ^ 0xFFFFFFFF, sizeof(salt_as_bytes));
         salt = le2ui(salt_as_bytes, sizeof(salt_as_bytes));
-        if (( ret=lfr_builder_init(matrix, rows,0,LFR_NO_COPY_DATA) )) {
-            fprintf(stderr, "Init  error: %s\n", strerror(ret));
-            return ret;
-        }
+        LibFrayed::Builder builder(rows,0,LFR_NO_COPY_DATA);
     
         double start, tot_construct=0, tot_query=0, tot_sample=0;
         size_t passes=0;
         for (unsigned t=0; t<ntrials; t++) {
             start = now();
 
-            lfr_builder_reset(matrix);
+            builder.reset();
             randomize(keys, seed, blocks<<32 ^ t<<1,    rows*keylen);
             if (!zeroize) randomize((uint8_t*)values,seed,blocks<<32 ^ t<<1 ^ 1,rows*sizeof(*values));
             record(&start, &tot_sample);
 
-            for (unsigned i=0; i<rows && !ret; i++) {
-                ret = lfr_builder_insert(matrix,&keys[keylen*i],keylen,values[i]);
-            }
-            if (ret) {
-                printf("Insert error %d = %s\n", ret, strerror(ret));
-                continue;
+            for (unsigned i=0; i<rows; i++) {
+                builder.lookup(&keys[keylen*i], keylen) = values[i];
             }
 
-            ret=lfr_uniform_build_threaded(map, matrix, augmented, salt, nthreads);
-            record(&start, &tot_construct);
-            if (ret) {
-                if (verbose) printf("Solve error: %d = %s\n", ret, strerror(ret));
-                continue;
+            LibFrayed::UniformMap map;
+            try {
+                map = LibFrayed::UniformMap(builder, augmented, salt, nthreads);
+            } catch (LibFrayed::BuildFailedException &e) {
+                if (verbose) printf("Solve error\n");
             }
+            record(&start, &tot_construct);
         
             uint64_t mask = (augmented==64) ? -(uint64_t)1 : ((uint64_t)1 << augmented)-1;
             int allpass = 1;
             for (unsigned i=0; i<rows; i++) {
-                uint64_t ret = lfr_uniform_query(map, &keys[i*keylen], keylen);
+                uint64_t ret = map.lookup(&keys[i*keylen], keylen);
                 if (ret != (values[i] & mask)) {
                     if (verbose) printf("  Fail in row %lld: should be 0x%llx, actually 0x%llx\n",
                         (long long)i, (long long)(values[i] & mask), (long long)ret
@@ -181,10 +173,8 @@ int main(int argc, const char **argv) {
             if (allpass && verbose) printf("  Pass!\n");
             passes += allpass;
             record(&start, &tot_query);
-            lfr_uniform_map_destroy(map);
         }
 
-        double us_per_query = INFINITY, sps = INFINITY, us_per_build = INFINITY, ns_per_sample = INFINITY;
         if (passes) {
             us_per_query = tot_query * 1e6 / passes / rows;
             ns_per_sample = tot_sample * 1e9 / passes / rows;
@@ -201,8 +191,6 @@ int main(int argc, const char **argv) {
             sps);
         fflush(stdout);
         
-        lfr_builder_destroy(matrix);
-norows:
         if (is_exponential) {
             long long blocks2 = blocks * ratio;
             if (blocks2 == blocks) blocks2++;

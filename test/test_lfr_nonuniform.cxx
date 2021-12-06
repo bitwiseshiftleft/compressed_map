@@ -3,7 +3,7 @@
  * @copyright 2020-2021 Rambus Inc.
  * @brief Test and bench nonuniform maps.
  */
- #include "lfr_nonuniform.h"
+#include "lfr_nonuniform.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <sodium.h>
@@ -19,8 +19,7 @@ static double now() {
 
 int main(int argc, char **argv) {
     unsigned nitems = 2;
-    int ret;
-    size_t query_length = 32;
+    size_t keybytes = 32;
 
     srandom(0);
     
@@ -29,7 +28,9 @@ int main(int argc, char **argv) {
         printf("nitems needs to be at least 2\n");
         return 1;
     }
-    unsigned long long neach[nitems], total=0;
+
+    unsigned long long total=0;
+    std::vector<unsigned long long> neach(nitems), neach_remaining(nitems);
     for (unsigned i=0; i<nitems; i++) {
         if (argc > (int)i+1) {
             neach[i] = atoll(argv[i+1]);
@@ -37,12 +38,10 @@ int main(int argc, char **argv) {
             neach[i] = 1000;
         }
         total += neach[i];
+        neach_remaining[i] = neach[i];
     }
 
     uint8_t *inputs;
-    
-    unsigned long long neach_remaining[nitems];
-    for (unsigned i=0; i<nitems; i++) { neach_remaining[i] = neach[i]; }
     
     /* Calculate entropy */
     double entropy = 0;
@@ -53,17 +52,12 @@ int main(int argc, char **argv) {
 
     printf("Creating objects...\n");
     double start = now(), elapsed;
-    inputs = malloc(query_length * total);
-    for (size_t b=0; b<query_length * total; b++) {
+    inputs = (uint8_t*)malloc(keybytes * total);
+    for (size_t b=0; b<keybytes * total; b++) {
         inputs[b] = random();
     }
 
-    lfr_builder_t builder;
-    ret = lfr_builder_init(builder,total,0,LFR_NO_COPY_DATA);
-    if (ret) {
-        printf("Can't initialize builder: %s\n", strerror(ret));
-        return ret;
-    }
+    LibFrayed::Builder builder(total,0,LFR_NO_COPY_DATA);
     for (unsigned i=0; i<total; i++) {
         int resp = 0;
         size_t it = (random() ^ (size_t)random()<<20) % (total-i);
@@ -77,38 +71,27 @@ int main(int argc, char **argv) {
             }
         }
 
-        ret = lfr_builder_insert(builder,&inputs[query_length*i],query_length,resp);
-        if (ret) {
-            printf("Can't add row %d: %s\n", i, strerror(ret));
-            return ret;
-        }
-        
+        builder.lookup(&inputs[keybytes*i],keybytes) = resp;
     }
 
     
     elapsed = now()-start;
     printf("   ... took %0.3f seconds = %0.1f usec/call\n",
         elapsed, elapsed * 1e6 / total);
-    
-    lfr_nonuniform_map_t map;
         
     printf("Create lfr_nonuniform...\n");
     start = now();
-    ret = lfr_nonuniform_build(map, builder);
-    if (ret) {
-        printf("Sketch failed!\n");
-        return -1;
-    }
+    LibFrayed::NonuniformMap map(builder);
     elapsed = now()-start;
     printf("   ... took %0.3f seconds = %0.3f usec/row\n", elapsed, elapsed * 1e6 / total);
     
     printf("Sketch created; sanity checking...\n");
     start = now();
     for (size_t i=0; i<total; i++) {
-        lfr_response_t answer = lfr_nonuniform_query(map,builder->relations[i].key,builder->relations[i].keybytes);
-        if (answer != builder->relations[i].value) {
+        lfr_response_t answer = map.lookup(builder.builder->relations[i].key,keybytes);
+        if (answer != builder.builder->relations[i].value) {
             printf("Bug: query %lld answer should be %d but query gave %d\n",
-                (unsigned long long)i, (int)builder->relations[i].value, (int)answer);
+                (unsigned long long)i, (int)builder.builder->relations[i].value, (int)answer);
         }
     }
     elapsed = now()-start;
@@ -117,12 +100,11 @@ int main(int argc, char **argv) {
     );
     
     size_t size = 0;
-    for (int i=0; i<map->nphases; i++) {
-        size += lfr_uniform_map_size(map->phases[i]);
+    for (int i=0; i<map.map->nphases; i++) {
+        size += lfr_uniform_map_size(map.map->phases[i]);
     }
     double ratio = entropy ? size / entropy : INFINITY;
     printf("size = %lld bytes, shannon = %d bytes, ratio = %0.3f\n", (long long) size, (int)entropy, ratio);
     
-    lfr_nonuniform_map_destroy(map);
     return 0;
 }

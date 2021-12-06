@@ -176,7 +176,7 @@ static lfr_response_t *lfr_builder_really_insert (
 }
 
 static lfr_response_t *lfr_builder_lookup_core (
-    lfr_builder_t builder,
+    const lfr_builder_t builder,
     const uint8_t *key,
     size_t keybytes,
     uint64_t *hash_p /* Return to save time */
@@ -197,7 +197,7 @@ static lfr_response_t *lfr_builder_lookup_core (
 }
 
 lfr_response_t *API_VIS lfr_builder_lookup (
-    lfr_builder_t builder,
+    const lfr_builder_t builder,
     const uint8_t *key,
     size_t keybytes
 ) {

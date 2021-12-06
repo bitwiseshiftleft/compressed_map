@@ -103,7 +103,69 @@ size_t _lfr_uniform_provision_columns(size_t rows);
 size_t _lfr_uniform_provision_max_rows(size_t cols);
 
 #ifdef __cplusplus
-}; // extern "C"
-#endif
+} // extern "C"
+
+namespace LibFrayed {
+    /** Exception: couldn't build the map */
+    class BuildFailedException: public std::exception {
+    public:
+        explicit BuildFailedException() {}
+        virtual ~BuildFailedException() _NOEXCEPT {}
+        virtual const char* what() const _NOEXCEPT { return ("LibFrayed map build failed"); }
+    };
+
+    /** Wrapper for map */
+    class UniformMap {
+    public:
+        /** Wrapped map object */
+        lfr_uniform_map_t map;
+
+        /** Empty constructor */
+        inline UniformMap() { memset(map,0,sizeof(map)); }
+
+        /** Move constructor */
+        inline UniformMap(LibFrayed::UniformMap &&other) {
+            map[0] = other.map[0];
+            memset(other.map,0,sizeof(other.map));
+        }
+
+        /** Move assignment */
+        inline UniformMap& operator=(LibFrayed::UniformMap &&other) {
+            lfr_uniform_map_destroy(map);
+            map[0] = other.map[0];
+            memset(other.map,0,sizeof(other.map));
+            return *this;
+        }
+
+        /** Construct from a builder */
+        inline UniformMap(const LibFrayed::Builder &builder, int value_bits, lfr_salt_t salt, int nthreads=0) {
+            int ret = lfr_uniform_build_threaded(map,builder.builder,value_bits,salt,nthreads);
+            if (ret == ENOMEM) {
+                throw std::bad_alloc();
+            } else if (ret == EAGAIN) {
+                throw BuildFailedException();
+            }
+        }
+
+        /** Destructor */
+        inline ~UniformMap() { lfr_uniform_map_destroy(map); }
+
+        /** Lookup */
+        inline lfr_response_t lookup(const uint8_t *data, size_t size) const {
+            return lfr_uniform_query(map,data,size);
+        }
+
+        /** Lookup */
+        inline lfr_response_t lookup(const std::vector<uint8_t> &v) const {
+            return lookup(v.data(),v.size());
+        }
+
+        /** Lookup */
+        inline lfr_response_t operator[] (const std::vector<uint8_t> &v) const {
+            return lookup(v);
+        }
+    };
+}
+#endif /* __cplusplus */
 
 #endif // __LFR_UNIFORM_H__

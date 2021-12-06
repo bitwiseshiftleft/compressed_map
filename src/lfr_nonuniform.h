@@ -31,8 +31,8 @@ typedef uint64_t lfr_locator_t;
 
 /** An interval structure used in the map to store a response. */
 typedef struct {
-    lfr_locator_t lower_bound;
-    lfr_response_t     response;
+    lfr_locator_t  lower_bound;
+    lfr_response_t response;
 } lfr_nonuniform_intervals_s, lfr_nonuniform_intervals_t[1];
 
 /** A nonuniform map structure, ready to be queried */
@@ -72,7 +72,62 @@ lfr_response_t lfr_nonuniform_query (
 );
 
 #ifdef __cplusplus
-}; // extern "C"
-#endif
+} // extern "C"
+
+namespace LibFrayed {
+    /** Wrapper for map */
+    class NonuniformMap {
+    public:
+        /** Wrapped map object */
+        lfr_nonuniform_map_t map;
+
+        /** Empty constructor */
+        inline NonuniformMap() { memset(map,0,sizeof(map)); }
+
+        /** Move constructor */
+        inline NonuniformMap(LibFrayed::NonuniformMap &&other) {
+            map[0] = other.map[0];
+            memset(other.map,0,sizeof(other.map));
+        }
+
+        /** Move assignment */
+        inline NonuniformMap& operator=(LibFrayed::NonuniformMap &&other) {
+            lfr_nonuniform_map_destroy(map);
+            map[0] = other.map[0];
+            memset(other.map,0,sizeof(other.map));
+            return *this;
+        }
+
+        /** Construct from a builder */
+        inline NonuniformMap(const LibFrayed::Builder &builder, int nthreads=0) {
+            (void)nthreads; // TODO
+            int ret = lfr_nonuniform_build(map,builder.builder);
+            if (ret == ENOMEM) {
+                throw std::bad_alloc();
+            } else if (ret == EAGAIN) {
+                throw BuildFailedException();
+            }
+        }
+
+        /** Destructor */
+        inline ~NonuniformMap() { lfr_nonuniform_map_destroy(map); }
+
+        /** Lookup */
+        inline lfr_response_t lookup(const uint8_t *data, size_t size) const {
+            return lfr_nonuniform_query(map,data,size);
+        }
+
+        /** Lookup */
+        inline lfr_response_t lookup(const std::vector<uint8_t> &v) const {
+            return lookup(v.data(),v.size());
+        }
+
+        /** Lookup */
+        inline lfr_response_t operator[] (const std::vector<uint8_t> &v) const {
+            return lookup(v);
+        }
+    };
+}
+#endif /* __cplusplus */
 
 #endif // __LFR_NONUNIFORM_H__

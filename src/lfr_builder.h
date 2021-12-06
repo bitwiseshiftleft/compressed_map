@@ -100,7 +100,7 @@ int lfr_builder_insert (
  * @param keybytes Length of the key data in bytes.
  */
 lfr_response_t *lfr_builder_lookup (
-    lfr_builder_t builder,
+    const lfr_builder_t builder,
     const uint8_t *key,
     size_t keybytes
 );
@@ -130,7 +130,86 @@ void lfr_builder_reset(lfr_builder_t builder);
 void lfr_builder_destroy(lfr_builder_t builder);
 
 #ifdef __cplusplus
-}; /* extern "C" */
+} /* extern "C" */
+
+#include <vector>
+namespace LibFrayed {
+    /** C++ wrapper for LibFrayed builder objects */
+    class Builder {
+    public:
+        /** Wrapped builder object */
+        lfr_builder_t builder;
+
+        /** Construct a builder with the given capacity, data capacity and flags */
+        inline Builder(size_t capacity=0, size_t data_capacity=0, uint8_t flags=0) {
+            int ret = lfr_builder_init(builder,capacity,data_capacity,flags);
+            if (ret) throw std::bad_alloc();
+        }
+        
+        /** Destructor */
+        inline ~Builder() { lfr_builder_destroy(builder); }
+
+        /** Erase all key-value pairs */
+        inline void reset() { lfr_builder_reset(builder); }
+
+        /** Number of set KVPs */
+        inline size_t size() const { return builder->used; }
+
+        /** Look up a value, inserting one with 0 if not found */
+        inline lfr_response_t &lookup(const uint8_t* data, size_t size) {
+            lfr_response_t *ret = lfr_builder_lookup_insert(builder, data, size, 0);
+            if (ret==NULL) throw std::bad_alloc();
+            return *ret;
+        }
+
+        /** Look up a value, inserting one with 0 if not found */
+        inline lfr_response_t &lookup(const std::vector<uint8_t> &v) {
+            return lookup(v.data(),v.size());
+        }
+
+        /** Look up a value, inserting one with 0 if not found */
+        inline lfr_response_t &operator[] (const std::vector<uint8_t> &v) {
+            return lookup(v.data(), v.size());
+        }
+
+        /** Look up a value, returning NULL if not found, const version */
+        inline const lfr_response_t *findPtr(const uint8_t *data, size_t size) const {
+            if (builder->flags & LFR_NO_HASHTABLE) {
+                throw std::logic_error("contains called with no hashtable!");
+            }
+            return lfr_builder_lookup(builder, data, size);
+        }
+
+        /** Look up a value, returning NULL if not found, const version */
+        inline const lfr_response_t *findPtr(const std::vector<uint8_t> &v) const {
+            return findPtr(v.data(), v.size());
+        }
+        
+        /** Look up a value, returning NULL if not found, non-const version */
+        inline lfr_response_t *findPtr(const uint8_t *data, size_t size) {
+            if (builder->flags & LFR_NO_HASHTABLE) {
+                throw std::logic_error("contains called with no hashtable!");
+            }
+            return lfr_builder_lookup(builder, data, size);
+        }
+        
+        /** Look up a value, returning NULL if not found, non-const version */
+        inline lfr_response_t *findPtr(const std::vector<uint8_t> &v) {
+            return findPtr(v.data(), v.size());
+        }
+
+        /** Check if the builder contains a value */
+        inline bool contains(const std::vector<uint8_t> &v) const {
+            return findPtr(v) != NULL;
+        }
+
+        /** Check if the builder contains a value */
+        inline bool contains(const uint8_t *data, size_t size) const {
+            return findPtr(data,size) != NULL;
+        }
+    };
+}
+
 #endif /* __cplusplus */
 
 #endif /* __LFR_BUILDER_H__ */

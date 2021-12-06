@@ -19,6 +19,7 @@ figures: $(FIGS_PNG)
 SAGE ?= /opt/homebrew/Caskroom/miniforge/base/envs/sage/bin/sage
 
 CC = clang
+CXX = clang++ --std=c++11
 #CFLAGS ?= -Wall -Wextra -Wpedantic -O3 -flto -ffast-math -march=native -mavx2 -mbmi2 -fPIC -fvisibility=hidden $(XCFLAGS) #-fsanitize=address
 CFLAGS ?= -Wall -Wextra -Wpedantic -O3 -flto -ffast-math -I $(HOME)/Software/include -fPIC -fvisibility=hidden $(XCFLAGS) #-fsanitize=address
 LDFLAGS ?= -O3 -flto $(XLDFLAGS) -lpthread -L $(HOME)/Software/lib #-fsanitize=address
@@ -33,6 +34,9 @@ build/%.o: src/%.c */*.h Makefile build/timestamp
 build/%.o: test/%.c */*.h Makefile build/timestamp
 	$(CC) $(CFLAGS) -c -o $@ $< -I src
 
+build/%.o: test/%.cxx */*.h Makefile build/timestamp
+	$(CXX) $(CFLAGS) -c -o $@ $< -I src
+
 build/%.o: src/%.c src/*.h Makefile build/timestamp
 	$(CC) $(CFLAGS) -Isrc -c -o $@ $<
 
@@ -41,19 +45,19 @@ build/%.o: test/%.c src/*.h Makefile build/timestamp
 
 build/libfrayedribbon.dylib: build/lfr_uniform.o build/tile_matrix.o build/lfr_nonuniform.o build/lfr_builder.o build/siphash.o
 	$(CC) $(LDFLAGS) -Wl,-dead_strip -o $@ -shared -dynamic $^
-	# strip -x $@
+	strip -x $@
 
 build/test_tilematrix: build/test_tilematrix.o build/tile_matrix.o
 	$(CC) $(LDFLAGS) -o $@ $^
 	
 build/test_lfr_uniform: build/test_lfr_uniform.o build/libfrayedribbon.so
-	$(CC) $(LDFLAGS) -o $@ $^ -lsodium
+	$(CXX) $(LDFLAGS) -o $@ $^ -lsodium -lc++
 
 %.so: %.dylib
 	ln -sf `basename $^` $@
 
 build/test_lfr_nonuniform: build/test_lfr_nonuniform.o build/libfrayedribbon.so
-	$(CC) $(LDFLAGS) -o $@ $< -lm -lfrayedribbon -lsodium -Lbuild
+	$(CXX) $(LDFLAGS) -o $@ $< -lm -lfrayedribbon -lsodium -Lbuild -lc++
 
 $(FIGS): mkfigure/for_slides.sage
 	$(SAGE) $<
