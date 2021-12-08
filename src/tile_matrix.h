@@ -37,7 +37,7 @@ typedef struct {
  */
 int tile_matrix_init(tile_matrix_t *matrix, size_t rows, size_t cols, size_t augcols);
 
-/** Destroy a matrix.  Free any intetrnal storage but not matrix itself
+/** Destroy a matrix.  Free any internal storage but not matrix itself
  * (which might be e.g. stack-allocated).
  */
 void tile_matrix_destroy(tile_matrix_t *matrix);

@@ -210,6 +210,7 @@ namespace LibFrayed {
             if (ret != 0) throw std::runtime_error("LibFrayed::uniform_map::serialize_into failed");
         }
 
+        /** Serialize and return as a vector */
         inline std::vector<uint8_t> serialize() const {
             size_t sz = serial_size();
             std::vector<uint8_t> ret(sz);

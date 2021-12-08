@@ -12,6 +12,7 @@
 * More tests around builder expanding memory.
 * Test various things with zero allowed tries, zero items, zero value bits, etc.
 * Doxyfile
+* Make tile_matrix_t a one-element array too?
 
 # Longer term
 

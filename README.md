@@ -15,7 +15,7 @@ If you look up a key *k* that isn't in the key set *K*, the static function does
 
 ## Approximate set membership
 
-It's possible to use a static function for approximate set membership, replacing a [Bloom filter](https://en.wikipedia.org/wiki/Bloom_filter).  This encodes a set *S* in a static function with an *v*-bit value space, by compressing the dictionary *D*\[*k*\] := 0 for each *k* in *S*.[^1]  From the compressed representation, you can check whether *k* is in *S*: if *k*&in;*S* then you will always get *D*\[*k*\] == 0.  In the case that *k*&notin;*S* then this holds for only a 2^-*m* fraction of the keys.  Libfrayed is suitable for approximate set membership, but Facebook's [ribbon filters](https://engineering.fb.com/2021/07/09/data-infrastructure/ribbon-filter/) are typically faster.
+It's possible to use a static function for approximate set membership, replacing a [Bloom filter](https://en.wikipedia.org/wiki/Bloom_filter).  This encodes a set *S* in a static function with a *v*-bit value space, by compressing the dictionary *D*\[*k*\] := 0 for each *k* in *S*.[^1]  From the compressed representation, you can check whether *k* is in *S*: if *k*&in;*S* then you will always get *D*\[*k*\] == 0.  In the case that *k*&notin;*S* then this holds for only a 2^-*m* fraction of the keys.  Libfrayed is suitable for approximate set membership, but Facebook's [ribbon filters](https://engineering.fb.com/2021/07/09/data-infrastructure/ribbon-filter/) are typically faster.
 
 [^1]: In general, you would set D\[*k*\] := hash(*k*).  But libfrayed already xors a hash(*k*) term into the output, so this isn't necessary.
 
@@ -63,6 +63,6 @@ I don't have a proof that such matrices are soluble with high probability.  But 
 
 The matrix solver is implemented on top of a generic dense-matrix solving library.  This library uses a "method of the four Russians" approach, but based on vector permutations instead of large tables.  This approach may be novel.  The idea is to divide the matrices into 8x8 tiles.  When multiplying a tile T by a row of tiles R, the solver caches values T*N for each nibble N, and uses vectorized table instructions (in AVX2 or NEON) to multiply quickly by the whole row.
 
-This approach doesn't get the full log n speedup of the four Russians method, but it's simple and fast.  In particular, the libfrayed solver seems to be faster than [M4RI](https://github.com/malb/m4ri) for small matrices but slower for large ones, with a crossover point of around 1000x1000.  I'm not sure if M4RI would be faster, but it's GPL-licensed and I wanted to release under MIT, so I wrote my own.
+This approach doesn't get the full log n speedup of the four Russians method, but it's simple and fast.  In particular, the libfrayed solver seems to be faster than [M4RI](https://github.com/malb/m4ri) for small matrices but slower for large ones, with a crossover point of around 1000x1000.  I'm not sure if M4RI would be faster in this application, since we have a mix of large and small matrices, and in fact copying data between matrices is as much a bottleneck as solving them.  But it's GPL-licensed and I wanted to release under MIT, so I wrote my own.
 
 ### Notes
