@@ -57,6 +57,12 @@ int main(int argc, char **argv) {
         inputs[b] = random();
     }
 
+    elapsed = now()-start;
+    printf("   ... took %0.3f seconds = %0.1f usec/call\n",
+        elapsed, elapsed * 1e6 / total);
+    start = now();
+
+    printf("Loading / deduping objects...\n");
     LibFrayed::Builder builder(total,0,LFR_NO_COPY_DATA);
     for (unsigned i=0; i<total; i++) {
         int resp = 0;
@@ -79,16 +85,20 @@ int main(int argc, char **argv) {
     printf("   ... took %0.3f seconds = %0.1f usec/call\n",
         elapsed, elapsed * 1e6 / total);
         
-    printf("Create lfr_nonuniform...\n");
+    printf("Building nonuniform map...\n");
     start = now();
     LibFrayed::NonuniformMap map(builder);
     elapsed = now()-start;
     printf("   ... took %0.3f seconds = %0.3f usec/row\n", elapsed, elapsed * 1e6 / total);
     
+    printf("Serializing / deserializing map...\n");
+    std::vector<uint8_t> ser = map.serialize();
+    LibFrayed::NonuniformMap map2(ser, LFR_NO_COPY_DATA);
+
     printf("Sketch created; sanity checking...\n");
     start = now();
     for (size_t i=0; i<total; i++) {
-        lfr_response_t answer = map.lookup(builder[i].key,keybytes);
+        lfr_response_t answer = map2.lookup(builder[i].key,keybytes);
         if (answer != builder[i].value) {
             printf("Bug: query %lld answer should be %d but query gave %d\n",
                 (unsigned long long)i, (int)builder[i].value, (int)answer);
@@ -99,10 +109,7 @@ int main(int argc, char **argv) {
         elapsed, elapsed * 1e6 / total
     );
     
-    size_t size = 0;
-    for (int i=0; i<map.map->nphases; i++) {
-        size += _lfr_uniform_map_vector_size(map.map->phases[i]);
-    }
+    size_t size = ser.size();
     double ratio = entropy ? size / entropy : INFINITY;
     printf("size = %lld bytes, shannon = %d bytes, ratio = %0.3f\n", (long long) size, (int)entropy, ratio);
     

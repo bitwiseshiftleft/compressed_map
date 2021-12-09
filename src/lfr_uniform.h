@@ -42,7 +42,7 @@ typedef struct {
     uint8_t value_bits;
     uint8_t data_is_mine; // vector memory was allocated here, and should be deallocated with lfr_uniform_map_destroy
     uint8_t _salt_hint; // used when the salt is derived
-    uint8_t *data;
+    const uint8_t *data; // never modified but may be freed
 } lfr_uniform_map_s, lfr_uniform_map_t[1];
 
 /** High-level build function: using the builder, compile to a map object.
@@ -84,7 +84,7 @@ lfr_response_t lfr_uniform_query (
 /** Return the number of bytes required to serialize the map */
 size_t lfr_uniform_map_serial_size(const lfr_uniform_map_t map);
 
-/** Serialize the map.  The output should be lfr_uniform_map_ser_size bytes long.
+/** Serialize the map.  The output should be lfr_uniform_map_ser_size(map) bytes long.
  * @return 0 on success.
  * @return nonzero on failure.  This function shouldn't fail, but maybe would
  * fail with an excessively large map.
@@ -96,7 +96,15 @@ int lfr_uniform_map_serialize(uint8_t *out, const lfr_uniform_map_t map);
  * @return 0 on success.
  * @return nonzero if the map is corrupt.
  */
-int lfr_uniform_map_deserialize(lfr_uniform_map_t map, const uint8_t *data, size_t data_size, uint8_t flags);
+int lfr_uniform_map_deserialize(
+    lfr_uniform_map_t map,
+    const uint8_t *data,
+    size_t data_size,
+    uint8_t flags
+);
+
+/** Mirror of LFR_BLOCKSIZE */
+extern const int _lfr_blocksize;
 
 
 /*****************************************************************
@@ -154,12 +162,12 @@ namespace LibFrayed {
         }
 
         /** Deserialize from vector */
-        inline UniformMap(const std::vector<uint8_t> &other) {
-            int ret = lfr_uniform_map_deserialize(map, other.data(), other.size(), 0);
+        inline UniformMap(const std::vector<uint8_t> &other, uint8_t flags=0) {
+            int ret = lfr_uniform_map_deserialize(map, other.data(), other.size(), flags);
             if (ret) throw std::runtime_error("corrupt LibFrayed::UniformMap");
         }
 
-        /** Deserialize from vector */
+        /** Deserialize from uint8_t* */
         inline UniformMap(const uint8_t *data, size_t data_size, uint8_t flags=0) {
             int ret = lfr_uniform_map_deserialize(map, data, data_size, flags);
             if (ret) throw std::runtime_error("corrupt LibFrayed::UniformMap");

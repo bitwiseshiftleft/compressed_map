@@ -71,6 +71,32 @@ lfr_response_t lfr_nonuniform_query (
     size_t keybytes
 );
 
+/*****************************************************************
+ *                         Serialization                         *
+ *****************************************************************/
+
+/** Return the number of bytes required to serialize the map */
+size_t lfr_nonuniform_map_serial_size(const lfr_nonuniform_map_t map);
+
+/** Serialize the map.  The output should be lfr_nonuniform_map_ser_size(map) bytes long.
+ * @return 0 on success.
+ * @return nonzero on failure.  This function shouldn't fail, but maybe would
+ * fail with an excessively large map.
+ */
+int lfr_nonuniform_map_serialize(uint8_t *out, const lfr_nonuniform_map_t map);
+
+/**
+ * Deserialize a map.  If flags & LFR_NO_COPY_DATA, then point to the data; otherwise copy it.
+ * @return 0 on success.
+ * @return nonzero if the map is corrupt.
+ */
+int lfr_nonuniform_map_deserialize(
+    lfr_nonuniform_map_t map,
+    const uint8_t *data,
+    size_t data_size,
+    uint8_t flags
+);
+
 #ifdef __cplusplus
 } // extern "C"
 
@@ -109,6 +135,18 @@ namespace LibFrayed {
             }
         }
 
+        /** Deserialize from vector */
+        inline NonuniformMap(const std::vector<uint8_t> &other, uint8_t flags=0) {
+            int ret = lfr_nonuniform_map_deserialize(map, other.data(), other.size(), flags);
+            if (ret) throw std::runtime_error("corrupt LibFrayed::NonuniformMap");
+        }
+
+        /** Deserialize from uint8_t* */
+        inline NonuniformMap(const uint8_t *data, size_t data_size, uint8_t flags=0) {
+            int ret = lfr_nonuniform_map_deserialize(map, data, data_size, flags);
+            if (ret) throw std::runtime_error("corrupt LibFrayed::NonuniformMap");
+        }
+
         /** Destructor */
         inline ~NonuniformMap() { lfr_nonuniform_map_destroy(map); }
 
@@ -125,6 +163,23 @@ namespace LibFrayed {
         /** Lookup */
         inline lfr_response_t operator[] (const std::vector<uint8_t> &v) const {
             return lookup(v);
+        }
+
+        /** Get serial size */
+        inline size_t serial_size() const { return lfr_nonuniform_map_serial_size(map); }
+        
+        /** Serialize */
+        inline void serialize_into(uint8_t *out) const {
+            int ret = lfr_nonuniform_map_serialize(out,map);
+            if (ret != 0) throw std::runtime_error("LibFrayed::nonuniform_map::serialize_into failed");
+        }
+
+        /** Serialize and return as a vector */
+        inline std::vector<uint8_t> serialize() const {
+            size_t sz = serial_size();
+            std::vector<uint8_t> ret(sz);
+            serialize_into(ret.data());
+            return ret;
         }
     };
 }

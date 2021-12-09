@@ -17,21 +17,6 @@
 #define LFR_INTERVAL_BYTES (40/8)
 #define LFR_INTERVAL_SH (8*(sizeof(lfr_locator_t) - LFR_INTERVAL_BYTES))
 
-/* Outer header.  TODO: currently unused; move to new serialize implementation */
-#define LFR_HEADER_MY_VERSION 0
-#define LFR_FILE_SALT_BYTES 4
-#define LFR_BUCKET_PHASE_BYTES_BYTES  (32/8) // limit: ~32 billion items / bucket
-#define LFR_BUCKET_OFFSET_BYTES_BYTES (48/8) // limit: ~256 terabytes
-#define LFR_TOTAL_SIZE_BYTES (48/8)
-#define LFR_NITEMS_BYTES (32/8)
-typedef struct {
-    uint8_t version;
-    uint8_t total_size[LFR_TOTAL_SIZE_BYTES];
-    uint8_t plan[LFR_INTERVAL_BYTES];
-    uint8_t file_salt[LFR_FILE_SALT_BYTES];
-    uint8_t nitems[LFR_NITEMS_BYTES];
-} __attribute__((packed)) lfr_nonuniform_header_t;
-
 /** Determine where phases need to start for the given interval bounds */
 static lfr_locator_t lfr_nonuniform_summarize_plan (
     const lfr_nonuniform_intervals_t *response_map,
@@ -522,4 +507,226 @@ lfr_response_t API_VIS lfr_nonuniform_query (
     
     assert(0 && "bug or map is corrupt: lfr_nonuniform_query should have narrowed down a response");
     return -(lfr_response_t)1;
+}
+
+#define LFR_NITEMS_BYTES  (32/8)
+#define LFR_NBLOCKS_BYTES (32/8)
+
+typedef struct {
+    uint8_t plan[LFR_INTERVAL_BYTES];
+    uint8_t nitems[LFR_NITEMS_BYTES];
+    uint8_t file_salt[sizeof(lfr_salt_t)-1];
+} __attribute__((packed)) lfr_nonuniform_header_t;
+
+typedef struct {
+    uint8_t lg_weight;
+    uint8_t response[sizeof(lfr_response_t)];
+} __attribute__((packed)) lfr_response_header_t;
+
+typedef struct {
+    uint8_t salt_hint;
+    uint8_t nblocks[LFR_NBLOCKS_BYTES];
+} __attribute__((packed)) lfr_phase_header_t;
+
+
+size_t API_VIS lfr_nonuniform_map_serial_size(const lfr_nonuniform_map_t map) {
+    size_t ret = sizeof(lfr_nonuniform_header_t);
+    ret += map->nresponses * sizeof(lfr_response_header_t);
+    ret += map->nphases * sizeof(lfr_phase_header_t);
+    for (int i=0; i<map->nphases; i++) {
+        ret += _lfr_uniform_map_vector_size(map->phases[i]);
+    }
+    return ret;
+}
+
+int API_VIS lfr_nonuniform_map_serialize(uint8_t *out, const lfr_nonuniform_map_t map) {
+    lfr_nonuniform_header_t *header = (lfr_nonuniform_header_t*) out;
+
+    /* Serialize map header */
+    int ret = ui2le(header->nitems, sizeof(header->nitems), map->nresponses);
+    if (ret) return ret;
+    if (popcount(map->plan) != map->nphases) return EINVAL;
+    ret = ui2le(header->plan, sizeof(header->plan), map->plan >> LFR_INTERVAL_SH);
+    if (ret) return ret;
+    ret = ui2le(header->file_salt, sizeof(header->file_salt), map->phases[0]->salt >> 8);
+    if (ret) return ret;
+    out += sizeof(*header);
+
+    /* Serialize response data */
+    lfr_locator_t base = 0;
+    for (int i=0, seen_balance=0; i<map->nresponses; i++) {
+        lfr_response_header_t *re = (lfr_response_header_t *)out;
+        lfr_locator_t nxt = (i < map->nresponses-1) ? map->response_map[i+1]->lower_bound : 0;
+        lfr_locator_t width = nxt-base;
+        base = nxt;
+
+        if (width == 0 && map->nresponses > 1) {
+            return EINVAL;
+        } else if (width > 0 && (width & (width-1)) == 0) {
+            re->lg_weight = high_bit(width);
+        } else {
+            /* It's the odd one out */
+            if (seen_balance) return EINVAL;
+            re->lg_weight = 0xFF;
+            seen_balance = 1;
+        }
+        ui2le(re->response, sizeof(re->response), map->response_map[i]->response);
+        out += sizeof(*re);
+    }
+
+    /* Serialize phase headers */
+    for (int i=0; i<map->nphases; i++) {
+        lfr_phase_header_t *ph = (lfr_phase_header_t *)out;
+        /* Check salt hint */
+        if (i > 0 && map->phases[i]->salt != fmix64(map->phases[i-1]->salt ^ map->phases[i]->_salt_hint)) {
+            return EINVAL;
+        }
+        if (i > 0) {
+            ph->salt_hint = map->phases[i]->_salt_hint;
+        } else {
+            ph->salt_hint = (uint8_t) map->phases[i]->salt; // least sig byte goes in salt hint
+        }
+        ret = ui2le(ph->nblocks,sizeof(ph->nblocks),map->phases[i]->blocks);
+        if (ret) return ret;
+        out += sizeof(*ph);
+    }
+
+    /* Serialize the actual data */
+    for (int i=0; i<map->nphases; i++) {
+        size_t s = _lfr_uniform_map_vector_size(map->phases[i]);
+        memcpy(out,map->phases[i]->data,s);
+        out += s;
+    }
+
+    return 0;
+}
+
+int API_VIS lfr_nonuniform_map_deserialize(
+    lfr_nonuniform_map_t map,
+    const uint8_t *data,
+    size_t data_size,
+    uint8_t flags
+) {
+    memset(map,0,sizeof(map[0]));
+    int ret = EINVAL;
+    if (data_size < sizeof(lfr_nonuniform_header_t)) goto inval;
+    const lfr_nonuniform_header_t *header = (const lfr_nonuniform_header_t*) data;
+
+    lfr_locator_t plan = map->plan = le2ui(header->plan, sizeof(header->plan)) << LFR_INTERVAL_SH;
+    map->nphases = popcount(plan);
+    map->nresponses = le2ui(header->nitems, sizeof(header->nitems));
+    if (map->nresponses == 0) goto inval;
+   
+
+    data += sizeof(*header);
+    assert(data_size >= sizeof(*header));
+    data_size -= sizeof(*header);
+
+    if (data_size < map->nphases*(uint64_t)sizeof(lfr_phase_header_t)
+               + map->nresponses*(uint64_t)sizeof(lfr_response_header_t)) {
+        goto inval;
+    }
+
+    /* deserialize the response data */
+    map->response_map = calloc(map->nresponses, sizeof(*map->response_map));
+    if (map->response_map == NULL) goto nomem;
+    unsigned seen_balance = 0; // 1+index of the 0xFF "balance of the interval" position
+    lfr_locator_t base = 0;
+    for (int i=0; i<map->nresponses; i++) {
+        const lfr_response_header_t *re = (const lfr_response_header_t *)data;
+        map->response_map[i]->response = le2ui(re->response,sizeof(re->response));
+        uint8_t lg_weight = re->lg_weight;
+
+        /* All of the intervals must be a power of 2, except at most one of them
+         * (the "balance" position)
+         */
+        if (lg_weight == 0xFF) {
+            if (seen_balance) goto inval;
+            seen_balance = i+1;
+            map->response_map[i]->lower_bound = base;
+        } else if (lg_weight >= sizeof(lfr_locator_t)*8) {
+            goto inval;
+        } else {
+            lfr_locator_t tmp = map->response_map[i]->lower_bound = base;
+            base += (lfr_locator_t)1 << lg_weight;
+            if (base < tmp && (seen_balance || i<map->nresponses-1 || base != 0)) {
+                /* It wrapped around! */
+                goto inval;
+            }
+        }
+
+        data += sizeof(*re);
+        assert(data_size >= sizeof(*re));
+        data_size -= sizeof(*re);
+    }
+    if (seen_balance) {
+        if (base == 0 && map->nresponses != 1) goto inval;
+        for (int i=seen_balance; i<map->nresponses; i++) {
+            map->response_map[i]->lower_bound -= base; // i.e. += balance
+        }
+    } else if (base != 0) {
+        goto inval;
+    }
+
+    /* deserialize the phase info.  starts destroying plan */
+    size_t remaining_data_required = 0;
+    int phlo = ctz(map->plan);
+    plan &= plan-1;
+    map->phases = calloc(map->nphases, sizeof(*map->phases));
+    if (map->phases == NULL) goto nomem;
+    for (int i=0; i<map->nphases; i++) {
+        const lfr_phase_header_t *ph = (const lfr_phase_header_t *)data;
+
+        map->phases[i]->blocks = le2ui(ph->nblocks, sizeof(ph->nblocks));
+        if (i>0) {
+            map->phases[i]->_salt_hint = ph->salt_hint;
+            map->phases[i]->salt = fmix64(map->phases[i-1]->salt ^ map->phases[i]->_salt_hint);
+        } else {
+            map->phases[i]->salt = le2ui(header->file_salt, sizeof(header->file_salt)) << 8
+                                 | ph->salt_hint;
+        }
+
+        uint8_t value_bits = map->phases[i]->value_bits = (plan ? ctz(plan) : 8*sizeof(plan)) - phlo;
+        phlo += value_bits;
+        plan &= (plan-1);
+        size_t ph_sz = (size_t)map->phases[i]->blocks * _lfr_blocksize * value_bits;
+        remaining_data_required += ph_sz;
+        if (remaining_data_required < ph_sz) goto inval; // overflow
+
+        data += sizeof(*ph);
+        assert(data_size >= sizeof(*ph));
+        data_size -= sizeof(*ph);
+    }
+
+    if (remaining_data_required != data_size) goto inval;
+    for (int i=0; i<map->nphases; i++) {
+        size_t ph_sz = (size_t)map->phases[i]->blocks * _lfr_blocksize * map->phases[i]->value_bits;
+        assert(data_size >= ph_sz);
+
+        if (flags & LFR_NO_COPY_DATA) {
+            map->phases[i]->data_is_mine = 0; // already
+            map->phases[i]->data = data;
+        } else {
+            uint8_t *ph_data = malloc(ph_sz);
+            if (ph_data == NULL) goto nomem;
+            memcpy(ph_data, data, ph_sz);
+            map->phases[i]->data = (const uint8_t *)ph_data;
+            map->phases[i]->data_is_mine = 1;
+        }
+
+        data += ph_sz;
+        data_size -= ph_sz;
+    }
+    assert(data_size == 0);
+
+    return 0;
+
+nomem:
+    ret = ENOMEM;
+    goto error;
+inval:
+    ret = EINVAL;
+error:
+    lfr_nonuniform_map_destroy(map);
+    return ret;
 }

@@ -22,6 +22,8 @@
 #define LFR_BLOCKSIZE 4
 #endif
 
+const int _lfr_blocksize = LFR_BLOCKSIZE;
+
 #if LFR_BLOCKSIZE==1
 typedef uint8_t lfr_uniform_block_t;
 #elif LFR_BLOCKSIZE==2
@@ -761,7 +763,7 @@ done:
 }
 
 void API_VIS lfr_uniform_map_destroy(lfr_uniform_map_t doomed) {
-    if (doomed->data_is_mine) free(doomed->data);
+    if (doomed->data_is_mine) free((uint8_t*)doomed->data);
     memset(doomed, 0, sizeof(*doomed));
 }
 
@@ -848,7 +850,8 @@ static int lfr_uniform_build_core (
     if (ret) goto done;
 
     // Write output
-    output->data = calloc(value_bits, blocks * LFR_BLOCKSIZE);
+    uint8_t *out_data = calloc(value_bits, blocks * LFR_BLOCKSIZE);
+    output->data = (const uint8_t *)out_data;
     if (output->data == NULL) {
         ret = ENOMEM;
         goto done;
@@ -866,7 +869,7 @@ static int lfr_uniform_build_core (
             for (size_t tile=0; tile<LFR_BLOCKSIZE*8/TILE_SIZE; tile++) {
                 tile_t out = m->data[tile*tstride + off + which_augcol/TILE_SIZE] >> (TILE_SIZE*(which_augcol % TILE_SIZE));
                 for (int b=0; b<TILE_SIZE/8; b++) {
-                    output->data[byte_index++] = (uint8_t)(out>>(8*b));
+                    out_data[byte_index++] = (uint8_t)(out>>(8*b));
                 }
             }
         }
@@ -976,12 +979,13 @@ int API_VIS lfr_uniform_map_deserialize (
         map->data_is_mine = 0;
         map->data = (uint8_t*)data;
     } else {
-        map->data = (uint8_t*)malloc(data_size);
-        if (map->data == NULL) {
+        uint8_t *map_data = (uint8_t*)malloc(data_size);
+        if (map_data == NULL) {
             lfr_uniform_map_destroy(map);
             return ENOMEM;
         }
-        memcpy(map->data, data, data_size);
+        memcpy(map_data, data, data_size);
+        map->data = (const uint8_t *)map_data;
         map->data_is_mine = 1;
     }
     map->salt = le2ui(header->salt, sizeof(header->salt));
