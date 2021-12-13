@@ -468,6 +468,7 @@ void tile_matrix_set_row(tile_matrix_t *a, size_t row, const uint8_t *data, cons
     assert(TILE_SIZE%8 == 0);
     const size_t TILE_BYTES = TILE_SIZE/8;
     assert(TILE_BYTES == sizeof(tile_edge_t));
+    assert(TILE_BYTES == 1); // if not, need to make sure we don't index off the end of augdata
 
     tile_t *r = &a->data[a->stride*(row/TILE_SIZE)];
     size_t tcols = TILES_SPANNING(a->cols), taug = TILES_SPANNING(a->aug_cols);
