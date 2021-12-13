@@ -414,7 +414,6 @@ int API_VIS lfr_nonuniform_build (
         
         lfr_uniform_map_destroy(out->phases[phase]);
         int phase_ret = lfr_uniform_build(out->phases[phase], builder, phhi+1-phlo);
-        out->phases[phase]->_salt_hint = phase_salt[phase];
 
         if (phase_ret == 0 && phase < nphases-1) {
             /* It's not the last phase.  Adjust the values of all items.
