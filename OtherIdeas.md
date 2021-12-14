@@ -3,15 +3,13 @@
 I explored several other options when building this library.  Here are some that
 seem sufficiently non-proprietary to publish.
 
-
-
-
 # Matrix structure
 
 ## Wider ribbon filters
 
 We can get to O(1) additive overhead if the width of the ribbon is O(log n
-sqrt(n)).  This is pretty slow though: it takes O(n^2) time.
+sqrt(n)).  This is pretty slow though: it takes O(n^2) time to solve and
+O(sqrt(n)) time to query.
 
 ## Frayed ribbons with more / less overhead
 
@@ -65,8 +63,11 @@ adding rows with carefully-chosen block indices but random offsets.  This would
 add more rows to the smaller matrices, while removing columns from the larger
 matrices.  The offsets could be chosen in such a way that each collection of
 columns remain row-deficient (by more than a certain margin, to ensure high
-solution probability).  However, doing so is somewhat tricky, and doesn't seem
-to improve solution times by enough to be worthwhile.
+solution probability).
+
+This seems worth doing if it can be done correctly, because the final matrices
+solved may be 2-8x wider than they are tall.  Adding extra rows earlier would
+thus save up to 2-8x performance on the slowest steps.
 
 Similarly, we could split larger rows in half, where a row with two blocks of
 ((A at offset I) + (B at offset J)) * M = C could be replaced by

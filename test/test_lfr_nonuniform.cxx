@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
     for (size_t i=0; i<total; i++) {
         lfr_response_t answer = map2.lookup(builder[i].key,keybytes);
         if (answer != builder[i].value) {
-            printf("Bug: query %lld answer should be %d but query gave %d\n",
+            fprintf(stderr, "Bug: query %lld answer should be %d but query gave %d\n",
                 (unsigned long long)i, (int)builder[i].value, (int)answer);
         }
     }

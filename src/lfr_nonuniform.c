@@ -54,17 +54,23 @@ static int cmp_fit(const void *va, const void *vb) {
     return 0;
 }
 
-/** Sort by response */
-static int cmp_item(const void *va, const void *vb) {
+/** Sort by alignment */
+static int cmp_align(const void *va, const void *vb) {
     const formulation_item_t *a = va, *b = vb;
+    lfr_locator_t wa = a->width, wb = b->width;
+    wa &= ~(wa-1); wb &= ~(wb-1);
+    if (wa > wb) return -1;
+    if (wa < wb) return  1;
+    if (a->width < b->width) return -1;
+    if (a->width > b->width) return 1;
+    if (a->count < b->count) return -1;
+    if (a->count > b->count) return 1;
     if (a->resp < b->resp) return -1;
     if (a->resp > b->resp) return 1;
-    
-    // Items with the same response must be the same item.
-    assert(a->width == b->width && a->count == b->count);
     return 0;
 }
 
+#include <stdio.h>
 /**
  * Given the counts for each value, optimize the intervals assigned to each
  * and compute a "plan" measuring where the phases begin and end.
@@ -166,15 +172,12 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
 
     /* Sort and calculate the interval bounds.
      * TODO: use a hash table to allow non-dense encodings.
-     * TODO: when doing so, should probably sort this to naturally
-     * align all intervals.
-     * TODO: this may open up other optimization opportunities.
      */
-    qsort(items,nitems,sizeof(items[0]),cmp_item);
+    qsort(items,nitems,sizeof(items[0]),cmp_align);
     total = 0;
     for (unsigned i=0; i<nitems; i++) {
         response_map[i]->lower_bound = total;
-        response_map[i]->response = i;
+        response_map[i]->response = items[i].resp;
         total += items[i].width;
     }
     
@@ -257,12 +260,12 @@ static inline int constrained_this_phase (
     
     high = (high-cur) & mask_after;
     lowx = (lowx-cur) & mask_after;
-    if (high <= lowx && high>>phlo == lowx>>phlo) {
-        /* The interval wraps, and includes all multiples of 1<<phlo */
-        return 0;
-    } else {
+    if (high > lowx || high>>phlo != lowx>>phlo) {
         *constraint = high>>phlo;
         return 1;
+    } else {
+        /* The interval wraps, and includes all multiples of 1<<phlo */
+        return 0;
     }
 }
 
@@ -288,6 +291,7 @@ int API_VIS lfr_nonuniform_build (
     const lfr_relation_t *relns = nonu_builder->relations;
     lfr_locator_t *current = NULL;
     bitset_t relevant = NULL;
+    int *response_perm = NULL;
 
     int *phase_salt = NULL;
     
@@ -318,6 +322,13 @@ int API_VIS lfr_nonuniform_build (
     /* Create plan and interval bounds */
     out->plan = plan = lfr_nonuniform_formulate_plan(out->response_map, item_counts, nitems);
     int nphases = popcount(plan);
+
+    /* Create the permutation of responses */
+    response_perm = calloc(nitems, sizeof(*response_perm));
+    if (response_perm == NULL) goto alloc_failed;
+    for (unsigned i=0; i<nitems; i++) {
+        response_perm[out->response_map[i]->response] = i;
+    }
 
     // Allocate the phase data
     out->phases = calloc(nphases, sizeof(*out->phases));
@@ -364,7 +375,7 @@ int API_VIS lfr_nonuniform_build (
         /* Count the number of constrained rows */
         bitset_clear_all(relevant, nrelns);
         for (size_t i=0; i<nrelns; i++) {
-            lfr_response_t resp = relns[i].value;
+            int resp = response_perm[relns[i].value];
             lfr_locator_t
                 lowx = out->response_map[resp]->lower_bound-1,
                 high = out->response_map[(resp+1) % nitems]->lower_bound-1,
@@ -399,7 +410,7 @@ int API_VIS lfr_nonuniform_build (
         /* Build the uniform map using constrained items */
         for (size_t i=0; i<nrelns; i++) {
             if (!bitset_test_bit(relevant, i)) continue; // it's not constrained this phase
-            lfr_response_t resp = relns[i].value;
+            lfr_response_t resp = response_perm[relns[i].value];
         
             lfr_locator_t
                 lowx = out->response_map[resp]->lower_bound-1,
@@ -417,17 +428,15 @@ int API_VIS lfr_nonuniform_build (
 
         if (phase_ret == 0 && phase < nphases-1) {
             /* It's not the last phase.  Adjust the values of all items.
-             *
-             * PERF: Once intervals are naturally aligned, we don't need
-             * to do this for most items: they take on a particular value in
-             * their aligned phase, and a fixed 0/1 in all later phases
-             * depending whether we start with second-most or second-least
-             * common answer.
-             *
-             * The exception is the most common response, since the end of its
-             * interval won't necessarily be naturally aligned.
+             * Skip the ones that are naturally aligned: they are always considered
+             * only in the phases determined by that alignment
              */
             for (size_t i=0; i<nrelns; i++) {
+                unsigned r = response_perm[relns[i].value];
+                lfr_locator_t w = ((r == nitems-1) ? 0 : out->response_map[r+1]->lower_bound)
+                               - out->response_map[r]->lower_bound;
+                if ((w & (w-1))==0) continue; // don't care about the result for the aligned ones
+
                 lfr_locator_t ci = current[i], mask=((lfr_locator_t)1<<phlo)-1;
                 ci &= mask;
                 ci += lfr_uniform_query(out->phases[phase], relns[i].key, relns[i].keybytes) << phlo;
@@ -451,6 +460,7 @@ alloc_failed:
 done:
     /* Clean up all allocations */
     free(phase_salt);
+    free(response_perm);
     bitset_destroy(relevant);
     free(current);
     lfr_builder_destroy(builder);
@@ -477,31 +487,37 @@ lfr_response_t API_VIS lfr_nonuniform_query (
     if (map->nphases <= 0) return map->response_map[0]->response;
     lfr_locator_t loc=0, plan=map->plan, known_mask = (plan-1) &~ plan;
 
-    /* Start with the second-last phase, because it determines the most items */
-    int starting_phase = map->nphases-2;
-    if (starting_phase < 0) starting_phase = 0;
-    for (int i=0; i<starting_phase; i++) plan &= plan-1;
+    /* The upper bits are the most informative.  However, in most cases the second-highest
+     * map has more bits than the highest one, so it's actually fastest to start there.
+     */
+    if (map->nphases >= 2) {
+        int h1 = high_bit(plan);
+        plan ^= (lfr_locator_t)1<<h1;
+        int h2 = high_bit(plan);
+        lfr_locator_t thisphase = lfr_uniform_query(map->phases[map->nphases-2], key, keybytes);
 
-    for (int phase=starting_phase, looped=0;; phase++) {
-        if (phase >= map->nphases) {
-            looped = 1;
-            phase = 0;
-            plan = map->plan;
-        }
-        if (looped && phase == starting_phase) break; // shouldn't happen
+        known_mask |= ((lfr_locator_t)1<<h1) - ((lfr_locator_t)1<<h2);
+        loc |= thisphase <<= h2;
+
+        lfr_response_t lower = bsearch_bound(map->nresponses,map->response_map,loc);
+        lfr_response_t upper = bsearch_bound(map->nresponses,map->response_map,loc |~ known_mask);
+        if (upper == lower) return upper;
+    }
+    plan = map->plan;
+
+    for (int phase=map->nphases-1; phase >= 0; phase--) {
+        int h = high_bit(plan);
+        plan ^= (lfr_locator_t)1<<h;
+        if (phase == map->nphases - 2) continue;
+
         lfr_locator_t thisphase = lfr_uniform_query(map->phases[phase], key, keybytes);
 
-        // Track what we now know
-        lfr_locator_t least = plan &~ (plan-1);
-        loc += thisphase * least;
-        plan -= least;
-        known_mask |= (plan - least) &~ plan;
+        loc |= thisphase <<= h;
+        known_mask |= -((lfr_locator_t)1<<h);
         
         lfr_response_t lower = bsearch_bound(map->nresponses,map->response_map,loc);
         lfr_response_t upper = bsearch_bound(map->nresponses,map->response_map,loc |~ known_mask);
-        if (upper == lower) {
-            return upper;
-        }
+        if (upper == lower) return upper;
     };
     
     assert(0 && "bug or map is corrupt: lfr_nonuniform_query should have narrowed down a response");
