@@ -93,14 +93,24 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
     const size_t *item_counts,
     unsigned nitems
 ) {
-    /* FIXME: adapt to systems with only one nonzero item */
-    /* TODO: adapt to non-sequential items */
+    /* TODO: adapt to non-sequential items. */
+    /* TODO: adapt caller to exclude zero-count items */
 
+    /* Special cases: no items */
+    if (nitems == 0) {
+        return 0; /* Don't need any phases of course */
+    } else if (nitems == 1) {
+        response_map[0]->lower_bound = 0;
+        response_map[0]->response = 0; /* TODO: = items[0].response */
+        return 0; /* Still don't need any phases */
+    }
+
+    /* Count total items */
     size_t total = 0;
-    /* Compute initial assignments as a starting point for the LP */
     for (unsigned i=0; i<nitems; i++) {
         total += item_counts[i];
     }
+    assert(total > 0);
     
     /* How to optimize interval widths:
      * 1. Assign to each locator i the fraction pi/total, rounded
@@ -134,7 +144,7 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
     for (unsigned i=0; remaining_width > 0; i++) {
         if (i >= nitems) {
             assert(0 && "bug: didn't exhaust the width");
-            return -1;
+            return 0;
         }
         if (items[i].width >= remaining_width) {
             items[i].width += remaining_width;
