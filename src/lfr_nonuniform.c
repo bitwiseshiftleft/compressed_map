@@ -40,12 +40,20 @@ static lfr_locator_t lfr_nonuniform_summarize_plan (
 typedef struct {
     size_t count;                   /** How many times the value appears in the dict */
     lfr_locator_t width;            /** The width of the locator interval: value to be optimized */
-    lfr_response_t resp; /** The response / dictionary value itself */
+    lfr_response_t resp;            /** The response / dictionary value itself */
 } formulation_item_t;
 
-/** Sort by interval width */
+/** Sort by how much was rounded off of the interval size,
+ * proportionally, descending.
+ */
 static int cmp_fit(const void *va, const void *vb) {
     const formulation_item_t *a = va, *b = vb;
+    __uint128_t ascore = a->width, bscore = b->width;
+    ascore *= b->count; bscore *= a->count;
+    if (ascore < bscore) return -1;
+    if (bscore < ascore) return  1;
+    /* Arbitrary order for the rest.  Smaller intervals
+     * first to decrease phases. */
     if (a->width < b->width) return -1;
     if (a->width > b->width) return 1;
     if (a->count < b->count) return -1;
@@ -71,8 +79,9 @@ static int cmp_align(const void *va, const void *vb) {
     return 0;
 }
 
-static inline int is_power_of_2(lfr_locator_t x) {
-    return (x & (x-1)) == 0;
+static inline lfr_locator_t floor_power_of_2(lfr_locator_t x) {
+    if (x==0) return 0;
+    return (lfr_locator_t) 1 << high_bit(x);
 }
 
 /**
@@ -84,35 +93,57 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
     const size_t *item_counts,
     unsigned nitems
 ) {
+    /* FIXME: adapt to systems with only one nonzero item */
+    /* TODO: adapt to non-sequential items */
+
     size_t total = 0;
     /* Compute initial assignments as a starting point for the LP */
     for (unsigned i=0; i<nitems; i++) {
         total += item_counts[i];
     }
     
-    /* TODO: I believe this is an analytical solution:
+    /* How to optimize interval widths:
      * 1. Assign to each locator i the fraction pi/total, rounded
      *    down to a power of 2.
      *    (i.e. interval width floor_po2(pi*LFR_INTERVAL_TOTAL / total)).
-     *
      * 2. Count how much total interval width is left over.
      * 3. Sort the intervals by badness of fit, i.e. by pi/interval_i descending.
      * 4. Starting with the worst fit, increase the width to the next power of 2,
      *    or the left-over width, until the left-over width is used up.
      */
 
-    /* Sort by width ~ count, ascending. */
-    size_t ratio = (size_t)(-1) / total;
-    lfr_locator_t silt_1 = 1;
+    lfr_locator_t total_width = 0;
     formulation_item_t items[nitems]; // TODO: heap alloc?
     for (unsigned i=0; i<nitems; i++) {
-        int bit = high_bit(item_counts[i] * ratio);
-        if (bit < (int)LFR_INTERVAL_SH) bit = LFR_INTERVAL_SH;
-        items[i].width = item_counts[i] ? silt_1 << bit : 0;
-        items[i].resp  = i; // TODO: support nonsequential values
-        items[i].count = item_counts[i];
+        __uint128_t count = items[i].count = item_counts[i];
+        items[i].resp = i; // TODO: support nonsequential values
+        lfr_locator_t width = floor_power_of_2((count << (8*sizeof(lfr_locator_t))) / total);
+        items[i].width = width;
+        if (LFR_INTERVAL_BYTES < sizeof(lfr_locator_t)) {
+            // Can't support maps where the ratio is trillions : 1.
+            assert(width >> LFR_INTERVAL_SH > 0);
+        }
+        total_width += width;
     }
     qsort(items,nitems,sizeof(items[0]),cmp_fit);
+
+    // remaining width = "entire interval" - total_width;
+    lfr_locator_t remaining_width = -total_width;
+
+    /* While there is remaining width, widen the intervals in priority order */
+    for (unsigned i=0; remaining_width > 0; i++) {
+        if (i >= nitems) {
+            assert(0 && "bug: didn't exhaust the width");
+            return -1;
+        }
+        if (items[i].width >= remaining_width) {
+            items[i].width += remaining_width;
+            remaining_width = 0; /* and thus, break */
+        } else {
+            remaining_width -= items[i].width;
+            items[i].width *= 2;
+        }
+    }
 
     /* The interval widths need to add to 1.  But they might not because they're
      * rounded up/down to powers of 2.
@@ -123,87 +154,6 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
         total += items[i].width;
     }
     items[nitems-1].width = -total;
-    
-    /* Simple linear programming to determine the optimal interval allocation.
-     *
-     * The derivative of expected file size wrt the assigned widths is piecewise
-     * linear, and it's naturally nicely factored: moving interval width from
-     * the biggest interval to any other affects only the sizes for those two
-     * intervals.  So it should be quick -- TODO, formally analyze -- to find
-     * an optimum just by hill climbing.
-     *
-     * PERF: in theory this should use a prio queue or something
-     * For only a few items it doesn't matter though.
-     *
-     * TODO: fully verify that this works.
-     * 
-     * TODO: is it an invariant that non_po2_count <= 1 during the optimization?
-     * If so, then don't need to track powers of 2.
-     */
-    lfr_locator_t half = silt_1 << (sizeof(half)*8-1);
-    unsigned ADJ_LIMIT = 1<<16; // TODO
-    int non_po2_count = 0;
-    for (unsigned adj=0; adj<ADJ_LIMIT; adj++) {
-        /* Calculate, for each interval, the derivative with respect to
-         * increasing or decreasing it.  These are usually different, because
-         * most items are at powers of 2, which is knee in the graph.
-         */
-        double max_up = -INFINITY;
-        double min_dn = INFINITY;
-        int i_max_up = 0, i_min_dn = 0;
-        int po2_up = 0, po2_dn = 0;
-        non_po2_count = 0;
-        for (unsigned i=0; i<nitems; i++) {
-            double deriv_up = -INFINITY, deriv_dn = INFINITY;
-
-            /* We will tie-break in favor of non-power-of-2 widths to make sure
-             * we eliminate them.
-             */
-            int po2 = is_power_of_2(items[i].width);
-            non_po2_count += !po2;
-
-            if (items[i].width < half) {
-                deriv_up = ldexp(items[i].count, -high_bit(items[i].width));
-            }
-            if (deriv_up > max_up || (deriv_up == max_up && !po2)) {
-                max_up = deriv_up;
-                i_max_up = i;
-                po2_up = po2;
-            }
-
-            if (items[i].width > 1) {
-                deriv_dn = ldexp(items[i].count, -high_bit(items[i].width-1));
-            }
-            if (deriv_dn < min_dn || (deriv_dn == min_dn && !po2)) {
-                min_dn = deriv_dn;
-                i_min_dn = i;
-                po2_dn = po2;
-            }
-        }
-
-        if (max_up < min_dn) {
-            /* All gradient directions are negative */
-            break;
-        } else if (max_up == min_dn && (po2_up || po2_dn)) {
-            /* Non-negative */
-            break;
-        }
-        
-        /* OK, we found positions where the tradeoff is favorable.
-         * Make that tradeoff until one or the other hits the next knee.
-         */
-        lfr_locator_t cap_up = ((lfr_locator_t)2 << high_bit(items[i_max_up].width))
-            - items[i_max_up].width;
-        lfr_locator_t cap_dn =
-            items[i_min_dn].width - ((lfr_locator_t)1 << high_bit(items[i_min_dn].width-1));
-        lfr_locator_t cap = (cap_up < cap_dn) ? cap_up : cap_dn;
-        
-        items[i_max_up].width += cap;
-        items[i_min_dn].width -= cap;
-    }
-
-    /* This should have eliminated all but one non-power-of-2 count */
-    assert(non_po2_count <= 1);
 
     /* Sort and calculate the interval bounds.
      * TODO: use a hash table to allow non-dense encodings.
