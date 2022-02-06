@@ -16,6 +16,7 @@
 
 #define LFR_INTERVAL_BYTES (40/8)
 #define LFR_INTERVAL_SH (8*(sizeof(lfr_locator_t) - LFR_INTERVAL_BYTES))
+#define LFR_INTETRVAL_TOTAL ((lfr_locator_t)1 << (8*LFR_INTERVAL_BYTES))
 
 /** Determine where phases need to start for the given interval bounds */
 static lfr_locator_t lfr_nonuniform_summarize_plan (
@@ -70,7 +71,10 @@ static int cmp_align(const void *va, const void *vb) {
     return 0;
 }
 
-#include <stdio.h>
+static inline int is_power_of_2(lfr_locator_t x) {
+    return (x & (x-1)) == 0;
+}
+
 /**
  * Given the counts for each value, optimize the intervals assigned to each
  * and compute a "plan" measuring where the phases begin and end.
@@ -86,6 +90,17 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
         total += item_counts[i];
     }
     
+    /* TODO: I believe this is an analytical solution:
+     * 1. Assign to each locator i the fraction pi/total, rounded
+     *    down to a power of 2.
+     *    (i.e. interval width floor_po2(pi*LFR_INTERVAL_TOTAL / total)).
+     *
+     * 2. Count how much total interval width is left over.
+     * 3. Sort the intervals by badness of fit, i.e. by pi/interval_i descending.
+     * 4. Starting with the worst fit, increase the width to the next power of 2,
+     *    or the left-over width, until the left-over width is used up.
+     */
+
     /* Sort by width ~ count, ascending. */
     size_t ratio = (size_t)(-1) / total;
     lfr_locator_t silt_1 = 1;
@@ -121,9 +136,13 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
      * For only a few items it doesn't matter though.
      *
      * TODO: fully verify that this works.
+     * 
+     * TODO: is it an invariant that non_po2_count <= 1 during the optimization?
+     * If so, then don't need to track powers of 2.
      */
     lfr_locator_t half = silt_1 << (sizeof(half)*8-1);
     unsigned ADJ_LIMIT = 1<<16; // TODO
+    int non_po2_count = 0;
     for (unsigned adj=0; adj<ADJ_LIMIT; adj++) {
         /* Calculate, for each interval, the derivative with respect to
          * increasing or decreasing it.  These are usually different, because
@@ -132,33 +151,46 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
         double max_up = -INFINITY;
         double min_dn = INFINITY;
         int i_max_up = 0, i_min_dn = 0;
+        int po2_up = 0, po2_dn = 0;
+        non_po2_count = 0;
         for (unsigned i=0; i<nitems; i++) {
-            double deriv_up = -INFINITY;
+            double deriv_up = -INFINITY, deriv_dn = INFINITY;
+
+            /* We will tie-break in favor of non-power-of-2 widths to make sure
+             * we eliminate them.
+             */
+            int po2 = is_power_of_2(items[i].width);
+            non_po2_count += !po2;
+
             if (items[i].width < half) {
                 deriv_up = ldexp(items[i].count, -high_bit(items[i].width));
             }
-            if (deriv_up > max_up) {
+            if (deriv_up > max_up || (deriv_up == max_up && !po2)) {
                 max_up = deriv_up;
                 i_max_up = i;
+                po2_up = po2;
             }
-            
-            double deriv_dn = INFINITY;
+
             if (items[i].width > 1) {
                 deriv_dn = ldexp(items[i].count, -high_bit(items[i].width-1));
             }
-            if (deriv_dn < min_dn) {
+            if (deriv_dn < min_dn || (deriv_dn == min_dn && !po2)) {
                 min_dn = deriv_dn;
                 i_min_dn = i;
+                po2_dn = po2;
             }
         }
 
-        if (max_up <= min_dn) {
+        if (max_up < min_dn) {
             /* All gradient directions are negative */
+            break;
+        } else if (max_up == min_dn && (po2_up || po2_dn)) {
+            /* Non-negative */
             break;
         }
         
-        /* OK, we found positions where the tradeoff is favorable.  Make that tradeoff until
-         * one or the other hits the next knee.
+        /* OK, we found positions where the tradeoff is favorable.
+         * Make that tradeoff until one or the other hits the next knee.
          */
         lfr_locator_t cap_up = ((lfr_locator_t)2 << high_bit(items[i_max_up].width))
             - items[i_max_up].width;
@@ -169,6 +201,9 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
         items[i_max_up].width += cap;
         items[i_min_dn].width -= cap;
     }
+
+    /* This should have eliminated all but one non-power-of-2 count */
+    assert(non_po2_count <= 1);
 
     /* Sort and calculate the interval bounds.
      * TODO: use a hash table to allow non-dense encodings.

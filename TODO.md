@@ -4,6 +4,7 @@
 
 * FIXME BUG: nonuniform maps don't work if an item has zero population.
 * FIXME BUG: nonuniform maps rarely, but non-negligibly, fail to build.
+* Implement the simpler solution for formulate_plan.
 * Make build use a hash table to store item pointers, instead of an array, for sparse items.
 
 ## Testing and documentation
