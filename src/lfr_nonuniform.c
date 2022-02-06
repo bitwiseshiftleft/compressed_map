@@ -90,10 +90,9 @@ static inline lfr_locator_t floor_power_of_2(lfr_locator_t x) {
  */
 static lfr_locator_t lfr_nonuniform_formulate_plan (
     lfr_nonuniform_intervals_t *response_map,
-    const size_t *item_counts,
+    formulation_item_t *items,
     unsigned nitems
 ) {
-    /* TODO: adapt to non-sequential items. */
     /* TODO: adapt caller to exclude zero-count items */
 
     /* Special cases: no items */
@@ -108,7 +107,7 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
     /* Count total items */
     size_t total = 0;
     for (unsigned i=0; i<nitems; i++) {
-        total += item_counts[i];
+        total += items[i].count;
     }
     assert(total > 0);
     
@@ -123,10 +122,8 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
      */
 
     lfr_locator_t total_width = 0;
-    formulation_item_t items[nitems]; // TODO: heap alloc?
     for (unsigned i=0; i<nitems; i++) {
-        __uint128_t count = items[i].count = item_counts[i];
-        items[i].resp = i; // TODO: support nonsequential values
+        __uint128_t count = items[i].count;
         lfr_locator_t width = floor_power_of_2((count << (8*sizeof(lfr_locator_t))) / total);
         items[i].width = width;
         if (LFR_INTERVAL_BYTES < sizeof(lfr_locator_t)) {
@@ -137,7 +134,7 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
     }
     qsort(items,nitems,sizeof(items[0]),cmp_fit);
 
-    // remaining width = "entire interval" - total_width;
+    /* remaining width = "entire interval" (=0) - total_width; */
     lfr_locator_t remaining_width = -total_width;
 
     /* While there is remaining width, widen the intervals in priority order */
@@ -155,9 +152,7 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
         }
     }
 
-    /* Sort and calculate the interval bounds.
-     * TODO: use a hash table to allow non-dense encodings.
-     */
+    /* Sort and calculate the interval bounds. */
     qsort(items,nitems,sizeof(items[0]),cmp_align);
     total = 0;
     for (unsigned i=0; i<nitems; i++) {
@@ -170,37 +165,39 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
     return lfr_nonuniform_summarize_plan(response_map, nitems);
 }
 
-static size_t get_nconstr_target (
+/* TODO: modify to support non-contiguous items.
+ * Also, just calculate this up front since it's constant based on plan
+ */
+static void get_nconstr_targets (
+    size_t *targets,
     lfr_locator_t plan,
-    int phase,
+    unsigned nphases,
     unsigned nitems,
-    const size_t *item_counts,
-    const lfr_nonuniform_intervals_t *response_map
+    const formulation_item_t *items
 ) {
-    if (!plan) return 0;
-    if (!phase) return SIZE_MAX; // phase 0 is deterministic
-
     /* False positives must be at most FP_TIGHTNESS_MULT * expected + FP_TIGHTNESS_ADD */
     const float FP_TIGHTNESS_MULT = 1.005; 
     const int FP_TIGHTNESS_ADD = 32;
 
-    /* All previous phases set plan at random */
-    for (int i=0; i<phase; i++) plan &= plan-1;
-    
-    lfr_locator_t plan_interval = plan &~ (plan-1);
-    
-    size_t total=0;
-    for (unsigned i=0; i<nitems; i++) {
-        lfr_locator_t interval_width = response_map[(i+1) % nitems]->lower_bound - response_map[i]->lower_bound;
-        size_t count = item_counts[i];
-        if (interval_width <= plan_interval) {
-            total += count;
-        } else if (interval_width/2 <= plan_interval) {
-            double frac = 2 - (double)interval_width / plan_interval;
-            total += frac*count * FP_TIGHTNESS_MULT + FP_TIGHTNESS_ADD;
+    for (unsigned phase=0; plan; plan &= plan-1, phase++) {
+        if (phase >= nphases) {
+            assert(0 && "counted the phases wrong in get_nconstr_targets");
+            break;
         }
+        lfr_locator_t plan_interval = plan &~ (plan-1);
+        size_t total=0;
+        for (unsigned i=0; i<nitems; i++) {
+            lfr_locator_t interval_width = items[i].width;
+            size_t count = items[i].count;
+            if (interval_width <= plan_interval) {
+                total += count;
+            } else if (interval_width/2 <= plan_interval) {
+                double frac = 2 - (double)interval_width / plan_interval;
+                total += frac*count * FP_TIGHTNESS_MULT + FP_TIGHTNESS_ADD;
+            }
+        }
+        targets[phase] = total;
     }
-    return total;
 }
 
 /** Binary search for item in map */
@@ -271,7 +268,9 @@ int API_VIS lfr_nonuniform_build (
     /* Preinitialize so that we can goto done */
     memset(out,0,sizeof(*out));
     int ret = -1;
-    size_t *item_counts = NULL, nrelns = nonu_builder->used;
+    size_t nrelns = nonu_builder->used;
+    formulation_item_t *items = NULL;
+    size_t *target_constraints = NULL;
     lfr_locator_t plan;
     const lfr_relation_t *relns = nonu_builder->relations;
     lfr_locator_t *current = NULL;
@@ -289,14 +288,17 @@ int API_VIS lfr_nonuniform_build (
         else if (resp+1 > nitems) nitems = resp+1;
     }
 
-    item_counts = calloc(nitems,sizeof(*item_counts));
-    if (item_counts == NULL) goto alloc_failed;
+    items = calloc(nitems,sizeof(*items));
+    if (items == NULL) goto alloc_failed;
+    for (size_t i=0; i<nitems; i++) {
+        items[i].resp = i; /* TODO: sparse with a hash map. */
+    }
 
     /* Count the items */
     for (size_t i=0; i<nrelns; i++) {
         lfr_response_t resp = relns[i].value;
         assert(resp <= nitems);
-        item_counts[resp]++;
+        items[resp].count++;
     }
     
     /* Create the response map */
@@ -305,8 +307,11 @@ int API_VIS lfr_nonuniform_build (
     out->nresponses = nitems;
 
     /* Create plan and interval bounds */
-    out->plan = plan = lfr_nonuniform_formulate_plan(out->response_map, item_counts, nitems);
+    out->plan = plan = lfr_nonuniform_formulate_plan(out->response_map, items, nitems);
     int nphases = popcount(plan);
+    target_constraints = calloc(nphases, sizeof(*target_constraints));
+    if (target_constraints == NULL) goto alloc_failed;
+    get_nconstr_targets(target_constraints, plan, nphases, nitems, items);
 
     /* Create the permutation of responses */
     response_perm = calloc(nitems, sizeof(*response_perm));
@@ -373,7 +378,7 @@ int API_VIS lfr_nonuniform_build (
             }
         }
         
-        if (nconstraints > get_nconstr_target(plan, phase, nitems, item_counts, out->response_map)) {
+        if (nconstraints > target_constraints[phase]) {
             // Too many false positives from previous phase
             phase--;
             continue;
@@ -449,7 +454,8 @@ done:
     bitset_destroy(relevant);
     free(current);
     lfr_builder_destroy(builder);
-    free(item_counts);
+    free(items);
+    free(target_constraints);
     if (ret != 0) lfr_nonuniform_map_destroy(out);
     
     return ret;
