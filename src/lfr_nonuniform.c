@@ -145,16 +145,6 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
         }
     }
 
-    /* The interval widths need to add to 1.  But they might not because they're
-     * rounded up/down to powers of 2.
-     */
-    total = 0;
-    for (unsigned i=0; i<nitems-1; i++) {
-        assert(total + items[i].width >= total); // TODO: deal with the overflow case?  Can it even happen?
-        total += items[i].width;
-    }
-    items[nitems-1].width = -total;
-
     /* Sort and calculate the interval bounds.
      * TODO: use a hash table to allow non-dense encodings.
      */
