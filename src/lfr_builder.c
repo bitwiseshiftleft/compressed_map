@@ -226,6 +226,17 @@ lfr_response_t *API_VIS lfr_builder_lookup_insert (
     return found;
 }
 
+lfr_response_t API_VIS lfr_builder_lookup_default (
+    const lfr_builder_t builder,
+    const uint8_t *key,
+    size_t keybytes,
+    lfr_response_t default_response
+) {
+    lfr_response_t *ret = lfr_builder_lookup(builder, key, keybytes);
+    if (ret == NULL) return default_response;
+    return *ret;
+}
+
 int API_VIS lfr_builder_insert (
     lfr_builder_t builder,
     const uint8_t *key,

@@ -51,10 +51,8 @@ typedef struct {
  * @return 0 on success.
  * @return ENOMEM if we ran out of memory.
  * @return EAGAIN if we tried and failed too many times.
+ * @return EINVAL if the builder is empty.
  *
- * @todo This function assumes a dense encoding of the responses, e.g. they
- * are 0 .. 5.  It will take huge amounts of memory if one of the responses
- * is large.
  */
 int lfr_nonuniform_build (
     lfr_nonuniform_map_t map,

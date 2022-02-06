@@ -22,21 +22,12 @@ int main(int argc, char **argv) {
     size_t keybytes = 32;
 
     srandom(0);
-    
-    if (argc > 2) nitems = argc - 1;
-    if (nitems < 1) {
-        printf("nitems needs to be at least 2\n");
-        return 1;
-    }
+    nitems = argc - 1;
 
     unsigned long long total=0;
     std::vector<unsigned long long> neach(nitems), neach_remaining(nitems);
     for (unsigned i=0; i<nitems; i++) {
-        if (argc > (int)i+1) {
-            neach[i] = atoll(argv[i+1]);
-        } else {
-            neach[i] = 1000;
-        }
+        neach[i] = atoll(argv[i+1]);
         total += neach[i];
         neach_remaining[i] = neach[i];
     }
@@ -69,7 +60,7 @@ int main(int argc, char **argv) {
         size_t it = (random() ^ (size_t)random()<<20) % (total-i);
         for (unsigned j=0; j<nitems; j++) {
             if (it < neach_remaining[j]) {
-                resp = j;
+                resp = j + 1234;
                 neach_remaining[j]--;
                 break;
             } else {

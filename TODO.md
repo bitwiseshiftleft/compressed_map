@@ -15,7 +15,7 @@
 
 ## API / included features
 
-* File-handling / ser / deser API.
+* File handling
 * Demo: CRL compression.
 
 ## Cleanliness
@@ -25,7 +25,7 @@
 
 ## Performance
 
-* Sort items to natural alignment when building.  Put balance last (simplifies deser I guess)
+* Take advantage of items being sorted to natural alignment while building?
 * Use sorting to optimize building multi-response maps, since we don't have to query (except for the balance class, darn)
 * Is (2nd highest, highest, then lowest) the right order on queries?  Maybe it should just be highest .. lowest?
 

@@ -109,6 +109,22 @@ lfr_response_t *lfr_builder_lookup (
 
 /**
  * Lookup a key in the builder's hashtable.  If the item isn't
+ * found, or if the builder was created with LFR_NO_HASHTABLE flag,
+ * then return the default value.
+ * @param builder The uniform map-builder object.
+ * @param key Pointer to the key data.
+ * @param keybytes Length of the key data in bytes.
+ * @param default_response default response if it's not found.
+ */
+lfr_response_t lfr_builder_lookup_default (
+    const lfr_builder_t builder,
+    const uint8_t *key,
+    size_t keybytes,
+    lfr_response_t default_response
+);
+
+/**
+ * Lookup a key in the builder's hashtable.  If the item isn't
  * found, or if the builder was created with the LFR_NO_HASHTABLE
  * flag, insert value_if_not_found.
  * @param builder The uniform map-builder object.

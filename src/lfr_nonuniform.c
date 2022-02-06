@@ -93,14 +93,12 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
     formulation_item_t *items,
     unsigned nitems
 ) {
-    /* TODO: adapt caller to exclude zero-count items */
-
     /* Special cases: no items */
     if (nitems == 0) {
         return 0; /* Don't need any phases of course */
     } else if (nitems == 1) {
         response_map[0]->lower_bound = 0;
-        response_map[0]->response = 0; /* TODO: = items[0].response */
+        response_map[0]->response = items[0].resp;
         return 0; /* Still don't need any phases */
     }
 
@@ -165,8 +163,8 @@ static lfr_locator_t lfr_nonuniform_formulate_plan (
     return lfr_nonuniform_summarize_plan(response_map, nitems);
 }
 
-/* TODO: modify to support non-contiguous items.
- * Also, just calculate this up front since it's constant based on plan
+/* Give a target number of constraints for each phase, to reroll if the map would
+ * be much larger than expected.
  */
 static void get_nconstr_targets (
     size_t *targets,
@@ -255,6 +253,73 @@ static inline int constrained_this_phase (
 #define LFR_PHASE_TRIES 5
 #endif
 
+int lfr_nonuniform_count_items (
+    size_t *nitems_p,
+    formulation_item_t **items_p,
+    const lfr_builder_t nonu_builder
+) {
+    const size_t INITIAL_NITEMS = 2048;
+    size_t nrelns = nonu_builder->used, nitems=0;
+    *items_p = NULL;
+    *nitems_p = 0;
+
+    formulation_item_t *items = NULL;
+
+    lfr_builder_t hashtable_for_counting;
+    int ret = lfr_builder_init(hashtable_for_counting, INITIAL_NITEMS,
+        INITIAL_NITEMS*sizeof(lfr_response_t), 0);
+    if (ret) return ret;
+
+    /* Insert into the hashtable */
+    for (size_t i=0; i<nrelns; i++) {
+        lfr_response_t *count = lfr_builder_lookup_insert(
+            hashtable_for_counting,
+            (const uint8_t*) &nonu_builder->relations[i].value,
+            sizeof(nonu_builder->relations[i].value),
+            0
+        );
+        if (count == NULL) {
+            ret = ENOMEM;
+            goto done;
+        }
+        (*count)++;
+    }
+
+    /* Allocate the items */
+    nitems = hashtable_for_counting->data_used / sizeof(lfr_response_t);
+    if (nitems == 0) {
+        /* Can't create a map with no items: it's a footgun, even more than
+         * other uses of this library.
+         */
+        return EINVAL;
+    }
+    *items_p = items = calloc(nitems,sizeof(*items));
+    if (items == NULL && nitems > 0) {
+        ret = ENOMEM;
+        goto done;
+    }
+    *nitems_p = nitems;
+
+    /* Pull them out of the hashtable */
+    const uint8_t *data_i = hashtable_for_counting->data;
+    for (size_t i=0; i<nitems; i++, data_i += sizeof(lfr_response_t)) {
+        memcpy(&items[i].resp, data_i, sizeof(lfr_response_t));
+
+        lfr_response_t *count = lfr_builder_lookup(hashtable_for_counting,
+            data_i, sizeof(lfr_response_t));
+        assert(count != NULL);
+        assert(*count > 0);
+        items[i].count = *count;
+    }
+
+    ret = 0;
+
+done:
+    lfr_builder_destroy(hashtable_for_counting);
+
+    return ret;
+}
+
 /* Create a lfr_nonuniform. */
 int API_VIS lfr_nonuniform_build (
     lfr_nonuniform_map_t out,
@@ -268,7 +333,7 @@ int API_VIS lfr_nonuniform_build (
     /* Preinitialize so that we can goto done */
     memset(out,0,sizeof(*out));
     int ret = -1;
-    size_t nrelns = nonu_builder->used;
+    size_t nrelns = nonu_builder->used, nitems;
     formulation_item_t *items = NULL;
     size_t *target_constraints = NULL;
     lfr_locator_t plan;
@@ -279,27 +344,8 @@ int API_VIS lfr_nonuniform_build (
 
     int *phase_salt = NULL;
     
-    // Find the maximum value
-    // TODO: support nitems = 0 or 1, or non-dense encodings (using a hash table)
-    unsigned MAX_NITEMS = 1<<16, nitems=2;
-    for (size_t i=0; i<nrelns; i++) {
-        lfr_response_t resp = relns[i].value;
-        if (resp >= MAX_NITEMS) return -1;
-        else if (resp+1 > nitems) nitems = resp+1;
-    }
-
-    items = calloc(nitems,sizeof(*items));
-    if (items == NULL) goto alloc_failed;
-    for (size_t i=0; i<nitems; i++) {
-        items[i].resp = i; /* TODO: sparse with a hash map. */
-    }
-
-    /* Count the items */
-    for (size_t i=0; i<nrelns; i++) {
-        lfr_response_t resp = relns[i].value;
-        assert(resp <= nitems);
-        items[resp].count++;
-    }
+    ret = lfr_nonuniform_count_items(&nitems, &items, nonu_builder);
+    if (ret) goto done;
     
     /* Create the response map */
     out->response_map = calloc(nitems, sizeof(*out->response_map));
@@ -417,15 +463,18 @@ int API_VIS lfr_nonuniform_build (
         int phase_ret = lfr_uniform_build(out->phases[phase], builder, phhi+1-phlo);
 
         if (phase_ret == 0 && phase < nphases-1) {
-            /* It's not the last phase.  Adjust the values of all items.
-             * Skip the ones that are naturally aligned: they are always considered
-             * only in the phases determined by that alignment
+            /* It's not the last phase.  Adjust the values of the items.
+             * Skip the ones that are powers of 2 in size: they are automatically
+             * considered in that phase and later.
+             *
+             * Unfortunately, the non-power-of-2 class is usually the largest.
+             * TODO: try to skip the query in cases where it doesn't matter?
              */
             for (size_t i=0; i<nrelns; i++) {
                 unsigned r = response_perm[relns[i].value];
                 lfr_locator_t w = ((r == nitems-1) ? 0 : out->response_map[r+1]->lower_bound)
                                - out->response_map[r]->lower_bound;
-                if ((w & (w-1))==0) continue; // don't care about the result for the aligned ones
+                if ((w & (w-1))==0) continue; // don't care about the result for the power-of-2 ones
 
                 lfr_locator_t ci = current[i], mask=((lfr_locator_t)1<<phlo)-1;
                 ci &= mask;
@@ -470,6 +519,7 @@ void API_VIS lfr_nonuniform_map_destroy(lfr_nonuniform_map_t map) {
     memset(map,0,sizeof(*map));
 }
 
+#include <stdio.h>
 lfr_response_t API_VIS lfr_nonuniform_query (
     const lfr_nonuniform_map_t map,
     const uint8_t *key,
