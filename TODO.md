@@ -2,9 +2,14 @@
 
 ## Correctness / suitability
 
-* FIXME BUG: nonuniform maps don't work if an item has zero population.
-* FIXME BUG: nonuniform maps rarely, but non-negligibly, fail to build.
+* Diagnose possible bug: nonuniform maps (used to???) rarely, but non-negligibly, fail to build.
 * Make build use a hash table to store item pointers, instead of an array, for sparse items.
+    * This is now working except for the response_perm.  However, response_perm presents a problem:
+      blindly replacing with a hash table will significantly harm performance, since it will be queried
+      multiple times for each and every key.  Possibly the right approach is to just allocate an
+      array mapping query[i]->index of response[i].
+
+* Version which works on strings that serializes string responses?
 
 ## Testing and documentation
 
@@ -25,9 +30,8 @@
 
 ## Performance
 
-* Take advantage of items being sorted to natural alignment while building?
-* Use sorting to optimize building multi-response maps, since we don't have to query (except for the balance class, darn)
-* Is (2nd highest, highest, then lowest) the right order on queries?  Maybe it should just be highest .. lowest?
+* Take better advantage of items being sorted to natural alignment while building?
+* Replace hash table with an associative array when the number of items is small?
 
 ## Builder / deduping hash table
 
