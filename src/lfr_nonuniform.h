@@ -1,7 +1,7 @@
 /**
  * @file lfr_nonuniform.h
  * @author Mike Hamburg
- * @copyright 2020-2021 Rambus Inc.
+ * @copyright 2020-2022 Rambus Inc.
  *
  * Non-uniform static functions.  These are more space-efficient
  * than uniform static functions if the distribution of values

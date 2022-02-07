@@ -1,7 +1,7 @@
 /**
  * @file tile_ops.h
  * @author Mike Hamburg
- * @copyright 2020-2021 Rambus Inc.
+ * @copyright 2020-2022 Rambus Inc.
  *
  * Tile matrix operations.  This library implements operations on 8x8 matrices,
  * represented by 64-bit integers.  The matrices are stored in column-major order,

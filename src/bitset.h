@@ -1,6 +1,6 @@
 /** @file bitset.h
  * @author Mike Hamburg
- * @copyright 2020-2021 Rambus Inc.
+ * @copyright 2020-2022 Rambus Inc.
  *
  * Basic bitsets.
  */

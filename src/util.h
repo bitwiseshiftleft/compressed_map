@@ -1,6 +1,6 @@
 /** @file util.h
  * @author Mike Hamburg
- * @copyright 2020-2021 Rambus Inc.
+ * @copyright 2020-2022 Rambus Inc.
  * Utility functions and macros.
  */
 

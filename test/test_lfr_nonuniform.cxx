@@ -1,6 +1,6 @@
 /** @file test_lfr_nonuniform.c
  * @author Mike Hamburg
- * @copyright 2020-2021 Rambus Inc.
+ * @copyright 2020-2022 Rambus Inc.
  * @brief Test and bench nonuniform maps.
  */
 #include "lfr_nonuniform.h"

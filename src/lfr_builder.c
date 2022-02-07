@@ -1,7 +1,7 @@
 /**
  * @file lfr_builder.c
  * @author Mike Hamburg
- * @copyright 2020-2021 Rambus Inc.
+ * @copyright 2020-2022 Rambus Inc.
  * Hash tables for building maps.
  */
 

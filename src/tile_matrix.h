@@ -1,6 +1,6 @@
 /** @file tile_matrix.h
  * @author Mike Hamburg
- * @copyright 2020-2021 Rambus Inc.
+ * @copyright 2020-2022 Rambus Inc.
  *
  * Operations on matrices, represented by 8x8 submatrix "tiles".
  * @todo: document restrictions on all these functions, e.g. on matrix dimensions

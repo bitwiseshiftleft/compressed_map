@@ -1,7 +1,7 @@
 /**
  * @file lfr_uniform.c
  * @author Mike Hamburg
- * @copyright 2020-2021 Rambus Inc.
+ * @copyright 2020-2022 Rambus Inc.
  * Uniform map implementation
  */
 #include "util.h"

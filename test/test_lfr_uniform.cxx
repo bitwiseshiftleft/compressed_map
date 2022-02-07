@@ -1,6 +1,6 @@
 /** @file test_lfr_uniform.c
  * @author Mike Hamburg
- * @copyright 2020-2021 Rambus Inc.
+ * @copyright 2020-2022 Rambus Inc.
  * @brief Test and bench uniform maps.
  */
 #include <stdio.h>
