@@ -5,3 +5,4 @@
  * Maps to/from files
  */
 
+#include "lfr_file.h"
