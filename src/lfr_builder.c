@@ -41,6 +41,7 @@ int API_VIS lfr_builder_init (
     builder->used = 0;
     builder->data_used = 0;
     builder->hash_capacity = 0;
+    builder->data_capacity = 0;
     builder->salt_hint = 0;
     builder->max_tries = LFR_DEFAULT_TRIES;
     builder->flags = flags;
@@ -82,6 +83,7 @@ int API_VIS lfr_builder_init (
             lfr_builder_destroy(builder);
             return ENOMEM;
         }
+        builder->data_capacity = data_capacity;
     }
     
     return 0;
