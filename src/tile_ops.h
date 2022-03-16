@@ -287,7 +287,7 @@ static inline int bit_index_to_col(int index) { return index / 8; }
 
     /** Compute a table for accelerated multiplication by a */
     static inline tile_precomputed_t tile_precompute_vmul(tile_t a) {
-        uint8x8_t av = vreinterpret_u64_u8(vdup_n_u64(a));
+        uint8x8_t av = vreinterpret_u8_u64(vdup_n_u64(a));
         uint8x16_t one = vdupq_n_u8(1);
 
         // create permutation table
@@ -300,7 +300,7 @@ static inline int bit_index_to_col(int index) { return index / 8; }
             low  ^= vdupq_lane_u8(av,0) & vceqq_u8(index_low  & one, one);
             high ^= vdupq_lane_u8(av,0) & vceqq_u8(index_high & one, one);
             one = vshlq_n_u8(one,1);
-            av = vreinterpret_u64_u8(vshr_n_u64(vreinterpret_u8_u64(av),8));
+            av = vreinterpret_u8_u64(vshr_n_u64(vreinterpret_u64_u8(av),8));
         }
         tile_precomputed_t ret = { low, high };
         return ret;
@@ -310,7 +310,7 @@ static inline int bit_index_to_col(int index) { return index / 8; }
     static inline tile_vector_t tile_vmul (const tile_precomputed_t *pa, tile_vector_t b) {
         uint8x16_t low = vdupq_n_u8(0xF);
         return vqtbl1q_u8(pa->table_low,  b&low)
-             ^ vqtbl1q_u8(pa->table_high, vshrq_n_u8(b,4)&low);
+             ^ vqtbl1q_u8(pa->table_high, vshrq_n_u8(b,4));
     }
 
     /** Read a possibly-unaligned tile */

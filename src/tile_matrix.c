@@ -57,9 +57,8 @@ static inline tile_t tile_reduce (
 
         rows_avail ^= 1<<row; // &~, but it's currently set so ^= is the same
 
-        tile_t bit = tile_single_bit(row,col,1);
-        perm ^= bit;
-        tile_t rows_affected = tile_broadcast_col(tile^bit,col);
+        perm ^= tile_single_bit(col,row,1);
+        tile_t rows_affected = tile_broadcast_col(tile^tile_single_bit(row,col,1),col);
         tile ^= tile_broadcast_row(tile,row) & rows_affected; // clear the tile
         aug ^= tile_broadcast_row(aug,row) & rows_affected; // clear the augmented tile
     }
@@ -573,7 +572,7 @@ size_t tile_matrix_rref(tile_matrix_t *a, bitset_t column_is_in_echelon) {
 
             /* If it's not the first, apply our progress so far */
             if (trow != trow_begin) {
-                tile_t factor = tile_mul(*working, tile_transpose(perm_matrix_cumulative));
+                tile_t factor = tile_mul(*working, perm_matrix_cumulative);
                 tile_matrix_rowop(working, factor, active, active_length);
             }
 
@@ -587,12 +586,13 @@ size_t tile_matrix_rref(tile_matrix_t *a, bitset_t column_is_in_echelon) {
 
                 if (trow != trow_begin) {
                     /* Eliminate these columns from the active row */
-                    tile_t factor = tile_mul(*active, tile_transpose(perm));
+                    tile_t factor = tile_mul(*active, perm);
                     tile_matrix_rowop(active, factor, working, active_length);
 
                     /* Swap them into the active row */
                     int nech = __builtin_popcountll(ech), nech_new = __builtin_popcountll(ech_new);
-                    tile2_bulk_swap_rows(&perm_matrix_cumulative, &perm, nech, first_available_row, nech_new);
+                    perm_matrix_cumulative = tile_bulk_copy_cols(perm_matrix_cumulative, perm, nech, first_available_row, nech_new);
+                    // tile2_bulk_swap_cols(&perm_matrix_cumulative, &perm, nech, first_available_row, nech_new);
                     for (size_t c=0; c<active_length; c++) {
                         tile2_bulk_swap_rows(&active[c], &working[c], nech, first_available_row, nech_new);
                     }
@@ -609,7 +609,6 @@ size_t tile_matrix_rref(tile_matrix_t *a, bitset_t column_is_in_echelon) {
         } while (trow != trow_begin && ech != tile_edge_full());
 
         /* OK, we now have a tile which echelonizes all the selected columns.  Eliminate them. */
-        perm_matrix_cumulative = tile_transpose(perm_matrix_cumulative);
         for (ssize_t trow=0; trow<(ssize_t)trows; trow++) {
             if (trow==trow_begin) continue;
             tile_t factor = tile_mul(a->data[trow*tstride+tcol], perm_matrix_cumulative);

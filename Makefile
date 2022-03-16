@@ -1,6 +1,7 @@
 # By Mike Hamburg.  (c) 2020-2021 Rambus Inc.
 TARGETS = build/test_tilematrix \
-	build/libfrayedribbon.dylib build/test_lfr_nonuniform build/test_lfr_uniform
+	build/libfrayedribbon.dylib build/test_lfr_nonuniform build/test_lfr_uniform \
+	build/compress_crl
 
 all: $(TARGETS)
 
@@ -21,8 +22,8 @@ SAGE ?= /opt/homebrew/Caskroom/miniforge/base/envs/sage/bin/sage
 CC = clang
 CXX = clang++ --std=c++11
 #CFLAGS ?= -Wall -Wextra -Wpedantic -O3 -flto -ffast-math -march=native -mavx2 -mbmi2 -fPIC -fvisibility=hidden $(XCFLAGS) #-fsanitize=address
-CFLAGS ?= -Wall -Wextra -Wpedantic -O3 -flto -ffast-math -I $(HOME)/Software/include -fPIC -fvisibility=hidden $(XCFLAGS) #-fsanitize=address
-LDFLAGS ?= -O3 -flto $(XLDFLAGS) -lpthread -L $(HOME)/Software/lib #-fsanitize=address
+CFLAGS ?= -Wall -Wextra -Wpedantic -O3 -flto -ffast-math -I /opt/homebrew/Cellar/openssl@1.1/1.1.1m/include/ -I $(HOME)/Software/include -fPIC -fvisibility=hidden $(XCFLAGS) #-fsanitize=address
+LDFLAGS ?= -O3 -flto $(XLDFLAGS) -lpthread  -L /opt/homebrew/lib/ -L /opt/homebrew/Cellar/openssl@1.1/1.1.1m/lib #-fsanitize=address
 
 build/timestamp: # mostly just to ensure that build exists
 	mkdir -p build
@@ -58,6 +59,9 @@ build/test_lfr_uniform: build/test_lfr_uniform.o build/libfrayedribbon.so
 
 build/test_lfr_nonuniform: build/test_lfr_nonuniform.o build/libfrayedribbon.so
 	$(CXX) $(LDFLAGS) -o $@ $< -lm -lfrayedribbon -lsodium -Lbuild -lc++
+
+build/compress_crl: build/compress_crl.o build/libfrayedribbon.so
+	$(CXX) $(LDFLAGS) -o $@ $< -lm -lfrayedribbon -lssl -lcrypto -Lbuild -lc++
 
 $(FIGS): mkfigure/for_slides.sage
 	$(SAGE) $<

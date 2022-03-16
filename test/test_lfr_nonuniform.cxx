@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
         size_t it = (random() ^ (size_t)random()<<20) % (total-i);
         for (unsigned j=0; j<nitems; j++) {
             if (it < neach_remaining[j]) {
-                resp = j + 1234;
+                resp = j;
                 neach_remaining[j]--;
                 break;
             } else {
