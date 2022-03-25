@@ -582,7 +582,7 @@ size_t tile_matrix_rref(tile_matrix_t *a, bitset_t column_is_in_echelon) {
 
             if (ech_new) {
                 /* We got some new columns.  Apply the operation to the rest of the row */
-                tile_matrix_rowtimes(&a->data[trow*tstride+tcol], aug, active_length);
+                tile_matrix_rowtimes(working, aug, active_length);
 
                 if (trow != trow_begin) {
                     /* Eliminate these columns from the active row */

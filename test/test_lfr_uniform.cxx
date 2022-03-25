@@ -131,7 +131,7 @@ int main(int argc, const char **argv) {
     for (long long blocks=blocks_min; blocks <= blocks_max && (bail <= 0 || successive_fails < bail); ) {
 
         size_t rows = _lfr_uniform_provision_max_rows(LFR_BLOCKSIZE*8*blocks);
-        double us_per_query = INFINITY, sps = INFINITY, us_per_build = INFINITY, ns_per_sample = INFINITY;
+        double us_per_query = INFINITY, sps = INFINITY, us_per_build = INFINITY, ns_per_hash = INFINITY, ns_per_sample = INFINITY;
 
         size_t row_deficit = LFR_BLOCKSIZE*8*blocks - rows;
         lfr_salt_t salt;
@@ -141,7 +141,7 @@ int main(int argc, const char **argv) {
         LibFrayed::Builder builder(rows,0,LFR_NO_COPY_DATA);
         builder.builder->max_tries = tries;
     
-        double start, tot_construct=0, tot_query=0, tot_sample=0, ignored=0;
+        double start, tot_construct=0, tot_query=0, tot_sample=0, tot_builder=0, ignored=0;
         size_t passes=0;
         bool did_ser_test=false;
         for (unsigned t=0; t<ntrials; t++) {
@@ -155,6 +155,7 @@ int main(int argc, const char **argv) {
             for (unsigned i=0; i<rows; i++) {
                 builder.lookup(&keys[keylen*i], keylen) = values[i] & mask;
             }
+            record(&start, &tot_builder);
 
             bool success = false;
             LibFrayed::UniformMap map;
@@ -191,16 +192,17 @@ int main(int argc, const char **argv) {
         if (passes) {
             us_per_query = tot_query * 1e6 / passes / rows;
             ns_per_sample = tot_sample * 1e9 / passes / rows;
+            ns_per_hash = tot_builder * 1e9 / passes / rows;
             us_per_build = tot_construct * 1e6 / passes / rows;
 	        successive_fails = 0;
         } else {
   	        successive_fails ++;
 	    }
         if (tot_construct > 0) sps = passes / tot_construct;
-        printf("Size %6d*%d*8 - %d x +%d pass rate = %4d / %4d = %5.1f%%, time/trial=%0.5f s, sample/row=%0.5f ns, build/row=%0.5f us, query/row=%0.5f us,  SPS=%0.3f\n",
+        printf("Size %6d*%d*8 - %d x +%d pass rate = %4d / %4d = %5.1f%%, time/trial=%0.5f s, samp/row=%0.4f ns, ht/row=%0.4fns, build/row=%0.5f us, query/row=%0.5f us,  SPS=%0.3f\n",
             (int)blocks, (int)LFR_BLOCKSIZE, (int)row_deficit, (int)augmented, (int)passes,
             (int)ntrials, 100.0*passes/ntrials,
-            tot_construct/ntrials, ns_per_sample, us_per_build, us_per_query,
+            (tot_construct+tot_builder+tot_sample)/ntrials, ns_per_sample, ns_per_hash, us_per_build, us_per_query,
             sps);
         fflush(stdout);
         

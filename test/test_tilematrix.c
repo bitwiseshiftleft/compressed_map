@@ -80,9 +80,9 @@ int main (int argc, char **argv) {
         tile_matrix_init(mb,match,cols,0);
         tile_matrix_init(mc,rows,cols,0);
 
+        tile_matrix_randomize(ma);
+        tile_matrix_randomize(mb);
         for (; ntrials; ntrials--) {
-            tile_matrix_randomize(ma);
-            tile_matrix_randomize(mb);
             tile_matrix_multiply_accumulate(mc,ma,mb);
         }
     } else if (!strcmp(mode,"rand")) {
