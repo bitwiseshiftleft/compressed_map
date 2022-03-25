@@ -8,7 +8,6 @@
 
 use crate::tilematrix::matrix::{Matrix,Systematic};
 use crate::tilematrix::bitset::BitSet;
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use core::hash::Hash;
 use std::cmp::max;
@@ -309,6 +308,51 @@ impl MapCore {
         })
     }
 
+    /** Try once to build from an iterator. */
+    fn build_from_iter(
+        iter: &mut dyn ExactSizeIterator<Item=LfrRow>,
+        bits_per_value:usize,
+        hash_key:&HasherKey
+    ) -> Option<MapCore> {
+        let nitems = iter.len();
+        let mask = if bits_per_value == Response::BITS as usize { !0 }
+            else { (1<<bits_per_value)-1 };
+        let nblocks = blocks_required(nitems);
+        let nblocks_po2 = next_power_of_2_ge(nblocks);
+        const BYTES_PER_VALUE : usize = (Response::BITS as usize) / 8;
+
+        /* Create the blocks */
+        let mut blocks : Vec<BlockGroup> = (0..nblocks_po2*2).map(|i|
+            if ((i&1) != 0) && i < 2*nblocks {
+                let mut ret = BlockGroup::new(BLOCKSIZE*8, bits_per_value, false);
+                ret.row_ids.reserve(BLOCKSIZE*8*2 * 5/4);
+                ret.contents.reserve_rows(BLOCKSIZE*8*2 * 5/4);
+                ret
+            } else {
+                BlockGroup::new(0,0,true)
+            }
+        ).collect();
+
+        let mut rowi=0;
+        for row in iter {
+            for i in [0,1] {
+                let blki = row.block_positions[i] as usize;
+                let blk = &mut blocks[2*blki+1];
+                let aug_bytes = if i==0 { [0u8; BYTES_PER_VALUE] }
+                    else { (row.augmented & mask).to_le_bytes() };
+                blk.contents.mut_add_row_as_bytes(&row.block_key[i].to_le_bytes(), &aug_bytes);
+                blk.row_ids.push(rowi);
+            }
+            rowi += 1;
+        }
+
+        /* Append guard rowidx */
+        for blk in &mut blocks { blk.row_ids.push(RowIdx::MAX); }
+
+        /* Solve it */
+        Self::build(blocks, nblocks, hash_key)
+    }
+
     /** Query this map at a given row */
     fn query(&self, row:LfrRow) -> Response {
         let mut ret = row.augmented;
@@ -327,7 +371,16 @@ impl MapCore {
     }
 }
 
+/** Uniform map */
 pub struct Map<T> {
+    hash_key: HasherKey,
+    pub core: MapCore,
+    _phantom: PhantomData<T>,
+    pub try_num: usize,
+}
+
+/** Approximate set */
+pub struct ApproxSet<T> {
     hash_key: HasherKey,
     pub core: MapCore,
     _phantom: PhantomData<T>,
@@ -365,58 +418,32 @@ fn next_power_of_2_ge(x:usize) -> usize {
 
 impl <T:Hash> Map<T> {
     /** Main API to build a map */
-    pub fn build(map: &HashMap<T,Response>, options: &BuildOptions) -> Option<Self> {
-        let nitems = map.len();
-        let nblocks = blocks_required(nitems);
-        let nblocks_po2 = next_power_of_2_ge(nblocks);
-        const BYTES_PER_VALUE : usize = (Response::BITS as usize) / 8 ;
-        
+    pub fn build<'a, Collection>(map: &'a Collection, options: &BuildOptions) -> Option<Self>
+    where for<'b> &'b Collection: IntoIterator<Item=(&'b T, &'b Response)>,
+          <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator
+    {
         /* Get the number of bits required */
         let bits_per_value = match options.bits_per_value {
             None => {
-                let mut range = 0;
-                for v in map.values() { range |= v; }
+                let mut range : Response = 0;
+                for v in map.into_iter().map(|(_k,v)| v) { range |= v; }
                 (Response::BITS - range.leading_zeros()) as usize
             },
             Some(bpv) => bpv as usize
         };
 
         for try_num in 0..options.max_tries {
-            /* Count the number of keys that hash to each block */
             let hkey = choose_key(options.key_gen, try_num);
-
-            /* Create the blocks */
-            let mut blocks : Vec<BlockGroup> = (0..nblocks_po2*2).map(|i|
-                if ((i&1) != 0) && i < 2*nblocks {
-                    let mut ret = BlockGroup::new(BLOCKSIZE*8, bits_per_value, false);
-                    ret.row_ids.reserve(BLOCKSIZE*8*2 * 5/4);
-                    ret.contents.reserve_rows(BLOCKSIZE*8*2 * 5/4);
-                    ret
-                } else {
-                    BlockGroup::new(0,0,true)
-                }
-            ).collect();
-
-            let mut rowi=0;
-            for (k,v) in map.iter() {
-                let mut row = hash_object_to_row(&hkey, nblocks, k);
+            let iter1 = map.into_iter();
+            let nblocks = blocks_required(iter1.len());
+            let mut iter = iter1.map(|(k,v)| {
+                let mut row = hash_object_to_row(&hkey,nblocks,k);
                 row.augmented ^= v;
-                for i in [0,1] {
-                    let blki = row.block_positions[i] as usize;
-                    let blk = &mut blocks[2*blki+1];
-                    let aug_bytes = if i==0 { [0u8; BYTES_PER_VALUE] }
-                        else { row.augmented.to_le_bytes() };
-                    blk.contents.mut_add_row_as_bytes(&row.block_key[i].to_le_bytes(), &aug_bytes);
-                    blk.row_ids.push(rowi);
-                }
-                rowi += 1;
-            }
-
-            /* Append guard rowidx */
-            for blk in &mut blocks { blk.row_ids.push(RowIdx::MAX); }
+                row
+            });
 
             /* Solve it! (with type-independent code) */
-            if let Some(solution) = MapCore::build(blocks, nblocks, &hkey) {
+            if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
                 return Some(Self {
                     try_num: try_num,
                     hash_key: hkey,
@@ -429,18 +456,66 @@ impl <T:Hash> Map<T> {
         None // Fail!
     }
 
+    /**
+     * Query an item in the map.  If (key,v) was included in the iterator when building the map,
+     * then v will be returned.  Otherwise, an arbitrary value will be returned.
+     */
     pub fn query(&self, key: &T) -> u64 {
         self.core.query(hash_object_to_row(&self.hash_key, self.core.nblocks, key))
+    }
+}
 
+impl <T:Hash> ApproxSet<T> {
+    /** Default bits per value if none is specified. */
+    const DEFAULT_BITS_PER_VALUE : usize = 8;
+
+    /** Main API to build a set */
+    pub fn build<'a, Collection>(set: &'a Collection, options: &BuildOptions) -> Option<Self>
+    where for<'b> &'b Collection: IntoIterator<Item=&'b T>,
+          <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator
+    {
+        /* Choose the number of bits required */
+        let bits_per_value = match options.bits_per_value {
+            None => Self::DEFAULT_BITS_PER_VALUE,
+            Some(bpv) => bpv as usize
+        };
+
+        for try_num in 0..options.max_tries {
+            let hkey = choose_key(options.key_gen, try_num);
+            let iter1 = set.into_iter();
+            let nblocks = blocks_required(iter1.len());
+            let mut iter = iter1.map(|k| hash_object_to_row(&hkey,nblocks,k) );
+
+            /* Solve it! (with type-independent code) */
+            if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
+                return Some(Self {
+                    try_num: try_num,
+                    hash_key: hkey,
+                    core: solution,
+                    _phantom: PhantomData::default()
+                });
+            }
+        }
+
+        None // Fail!
+    }
+
+    /**
+     * Query an item in the set.  If key was included in the iterator when building the set,
+     * then return true.  Otherwise, probably return false.
+     */
+    pub fn probably_contains(&self, key: &T) -> bool {
+        self.core.query(hash_object_to_row(&self.hash_key, self.core.nblocks, key)) == 0
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::uniform::{Map,BuildOptions};
+    use crate::uniform::{ApproxSet,Map,BuildOptions};
     use rand::{thread_rng,Rng};
-    use std::collections::HashMap;
+    use std::collections::{HashMap,HashSet};
 
+    /* Test map functionality */
     #[test]
     fn test_uniform_map() {
         let mut rng = thread_rng();
@@ -453,6 +528,31 @@ mod tests {
             for (k,v) in map.iter() {
                 assert_eq!(hiermap.query(&k), *v);
             }
+        }
+    }
+
+    /* Test set functionality */
+    #[test]
+    fn test_approx_set() {
+        let mut rng = thread_rng();
+        let mut set = HashSet::new();
+        for i in 0..10 {
+            for _j in 0..99*i {
+                set.insert(rng.gen::<u64>());
+            }
+            let hiermap = ApproxSet::build(&set, &BuildOptions::default()).unwrap();
+            for k in set.iter() {
+                assert_eq!(hiermap.probably_contains(&k), true);
+            }
+
+            let mut false_positives = 0;
+            let ntries = 10000;
+            let mu = ntries as f64 / 2f64.powf(hiermap.core.bits_per_value as f64);
+            for _ in 0..ntries {
+                false_positives += hiermap.probably_contains(&rng.gen::<u64>()) as usize;
+            }
+            // println!("{} false positives", false_positives);
+            assert!((false_positives as f64) < mu + 4.*mu.sqrt());
         }
     }
 }

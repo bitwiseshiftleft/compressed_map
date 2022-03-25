@@ -1,11 +1,10 @@
 
 # Rust port
 
+* AVX2 code
 * Nonuniform maps
-* Approximate sets
 * Clean up code TODOs
 * Rename functions for clarity
-* Each pass of set building should just take an iterator.
 * C / C++ interface
 * Demo app
 * File handling / serde
@@ -28,6 +27,7 @@ Also Rust has no threading.
     
 # For release
 
+* Detect vector acceleration
 * Stabilize interface and format
 
 ## Testing and documentation
