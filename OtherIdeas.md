@@ -185,9 +185,25 @@ It might still be worth substituting M4RI or gf2toolkit and benchmarking though:
 I have no idea which is faster for just copying rows/columns around, and M4RI
 supports multithreading.
 
-## Different tile sizes
+## Optimizing for many different results
 
-8x8 tiles seemed to perform best, in part because lookup instructions have 8-bit
-output.  You might imagine that 16x16 would be better with AVX2's 256-bit
-vectors, but the required permutations on 256-bit vectors are actually pretty
-expensive, so it was slower and more complex in my tests.
+For tables with many different possible results, queries are somewhat slow because many uniform maps might need to be consulted.  However, it may be possible to reduce this at a small cost in size efficiency.
+
+One part of the approach is to properly align the intervals, and optimize cases where some intervals need not be considered in a given phase.
+
+However, there is a possible approach where fewer tables would need to be consulted even in the worst case.  Arrange all intervals so that they are power-of-2 sized and aligned, except for one
+case (the "default" case).  Then the phases could be defined by the pattern of bits in the default interval size.  For example, if the encoding table is:
+
+* 00x -> A
+* 010 -> B
+* 1xx or x11 -> C
+
+This would normally require 3 leveles.  But we can randomly permute the last two bits (according to the hash function) to get:
+
+* 0x0 // 00x -> A depending on hash
+* 010 // 001 -> B depending on hash
+* 1xx or x11 -> C
+
+Then with about sqrt(n) extra space, the calculation can be adjusted so that the least significant two levels are the same size (have about the same number of A's in them), so that the table collapses to only 2 levels.  It might be further possible to make some of the A's shared between the two tables (using xor instead of a rotation), but that might extend solve time too much.
+
+

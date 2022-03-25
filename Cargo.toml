@@ -1,0 +1,29 @@
+[package]
+name = "sparselinear"
+version = "0.1.0"
+edition = "2021"
+
+# TODO: pin hashes
+
+[dependencies]
+rand = "0.8.5"
+# serde = { version = "1.0", features = ["derive"] }
+siphasher = "0.3"
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "matrix_ops"
+harness = false
+
+[[bench]]
+name = "uniform"
+harness = false
+
+[build]
+debug = 1
+
+[profile.release]
+lto = true
+#panic = "abort"
