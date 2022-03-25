@@ -1,4 +1,4 @@
-/**
+/*
  * @file matrix.rs
  * @author Mike Hamburg
  * @copyright 2020-2022 Rambus Inc.
@@ -30,7 +30,7 @@ pub struct Matrix {
 }
 
 impl Matrix {
-    /** Create a new matrix.  PERF: uninit version? */
+    /** Create a new matrix. */
     pub fn new(rows:usize, cols_main:usize, cols_aug:usize) -> Matrix {
         let stride = tiles_spanning(cols_main) + tiles_spanning(cols_aug);
         let height = tiles_spanning(rows);
@@ -89,6 +89,7 @@ impl Matrix {
     }
 
     /** Set all elements of the matrix to zero */
+    #[allow(dead_code)]
     pub fn zeroize(&mut self) { self.tiles.fill(Tile::ZERO); }
 
     /** self += other */
@@ -116,6 +117,7 @@ impl Matrix {
     }
 
     /** Return a single bit of the matrix */
+    #[allow(dead_code)]
     pub fn get_bit(&self, row:usize, col:usize) -> bool {
         let ebits = Tile::EDGE_BITS;
         self.tiles[(row/ebits)*self.stride + (col/ebits)].get_bit(row%ebits, col%ebits)
@@ -128,6 +130,7 @@ impl Matrix {
     }
 
     /** Print the matrix, for debugging purposes */
+    #[allow(dead_code)]
     pub fn print(&self, name:&str) {
         let ebits = Tile::EDGE_BITS;
         print!("Matrix {}:\n", name);
@@ -201,6 +204,7 @@ impl Matrix {
     }
 
     /** Randomize the matrix, for testing purposes */
+    #[allow(dead_code)]
     pub fn randomize(&mut self) {
         let trows = tiles_spanning(self.rows);
         let tcols = tiles_spanning(self.cols_main);
@@ -284,7 +288,7 @@ impl Matrix {
     }
 
     /**
-     * Put self in row-reduced echelon form (RREF).
+     * Put self in row-reduced echelon form.
      * Return the rank and a set of which columns are in echelon
      */
     pub fn rref(&mut self) -> (usize, BitSet) {
@@ -652,9 +656,9 @@ impl Matrix {
     }
 
     /**
-     * rref's self.
-     * If self has full row-rank, then return its systematic form.
-     * Otherwise return None
+     * Puts self in row-reduced echelon form.
+     * Then if self has full row-rank, then return its systematic form.
+     * Otherwise return None.
      */
     pub fn systematic_form(&mut self) -> Option<Systematic> {
         let (rank, column_is_in_echelon) = self.rref();

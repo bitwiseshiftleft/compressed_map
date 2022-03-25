@@ -1,4 +1,4 @@
-/**
+/*
  * @file mod.rs
  * @author Mike Hamburg
  * @copyright 2020-2022 Rambus Inc.
@@ -8,6 +8,14 @@
  * build the hierarchical matrix solver.  Possible future work:
  * Spin this off to its own mature package.
  */
+
+/** Small fixed-size matrix "tiles" for implementing larger matrices. */
 pub mod tile;
+
+/** Fast matrix library made of tile matrices. */
 pub mod matrix;
+
+/** Simple bit sets.  The bit-set crate is actually kind of slow,
+ * and was bottlenecking the code.
+ */
 pub mod bitset;

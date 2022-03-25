@@ -1,4 +1,4 @@
-/**
+/*
  * @file tile.rs
  * @author Mike Hamburg
  * @copyright 2020-2022 Rambus Inc.
@@ -355,6 +355,7 @@ impl Tile {
     }
 
     /** Print self for debug */
+    #[allow(dead_code)]
     pub fn print(&self, name:&str) {
         print!("Matrix {}:\n", name);
         for i in 0..Tile::EDGE_BITS {
@@ -466,7 +467,7 @@ pub mod vectorized {
     }
 
     /** "Permute" columns of the tile according to "permutation".
-     * New column x = old column permutation[x].
+     * New column x = old column permutation(x).
      * ("permutation" need not actually be a permutation)
      * Any value greater than 0xF (in particular, PERMUTE_ZERO)
      * will result in the column becoming zero.

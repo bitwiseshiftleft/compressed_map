@@ -8,6 +8,7 @@
 * C / C++ interface
 * Demo app
 * File handling / serde
+* More documentation
 
 ## Rust performance:
 

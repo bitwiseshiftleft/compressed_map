@@ -33,11 +33,12 @@ fn criterion_benchmark(crit: &mut Criterion) {
         let mut umap = None;
         let mut total_tries = 0;
         let mut total_builds = 0;
+        let mut options = BuildOptions::default();
         crit.bench_function(&format!("uniform build {}",size),
             |crit| crit.iter(|| {
-                umap = Map::build(&map, &BuildOptions::default());
+                umap = Map::build(&map, &mut options);
                 assert!(umap.is_some()); /* Assert success */
-                total_tries += umap.as_ref().unwrap().try_num + 1;
+                total_tries += options.try_num + 1;
                 total_builds += 1;
             }));
         println!("Building for size {} success rate {}%", size,
@@ -80,11 +81,12 @@ fn criterion_benchmark_slow(crit: &mut Criterion) {
         let mut umap = None;
         let mut total_tries = 0;
         let mut total_builds = 0;
+        let mut options = BuildOptions::default();
         crit.bench_function(&format!("uniform build {}",size),
             |crit| crit.iter(|| {
-                umap = Map::build(&map, &BuildOptions::default());
+                umap = Map::build(&map, &mut options);
                 assert!(umap.is_some()); /* Assert success */
-                total_tries += umap.as_ref().unwrap().try_num + 1;
+                total_tries += options.try_num + 1;
                 total_builds += 1;
             }));
         println!("Building for size {} success rate {}%", size,

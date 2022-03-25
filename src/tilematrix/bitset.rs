@@ -1,4 +1,4 @@
-/**
+/*
  * @file bitset.rs
  * @author Mike Hamburg
  * @copyright 2020-2022 Rambus Inc.
@@ -20,6 +20,7 @@ impl BitSet {
     }
 
     /** Clear and free self */
+    #[allow(dead_code)]
     pub fn free(&mut self) {
         self.set.resize(0,0);
         self.set.shrink_to_fit();
@@ -33,6 +34,7 @@ impl BitSet {
 
     /** Remove a bit in the set */
     #[inline(always)]
+    #[allow(dead_code)]
     pub fn remove(&mut self, x:usize) {
         self.set[x/64] &= !(1<<(x%64));
     }
@@ -83,6 +85,7 @@ impl BitSet {
     }
 
     /** Iterate over self */
+    #[allow(dead_code)]
     pub fn iter(&self) -> BitSetIterator {
         BitSetIterator { set: &self, offset:0, cur:0 }
     }

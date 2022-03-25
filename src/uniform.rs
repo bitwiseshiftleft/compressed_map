@@ -1,4 +1,4 @@
-/**
+/*
  * @file uniform.rs
  * @author Mike Hamburg
  * @copyright 2020-2022 Rambus Inc.
@@ -16,16 +16,20 @@ use rand::rngs::OsRng;
 use std::mem::replace;
 use siphasher::sip128::{Hasher128, SipHasher13, Hash128};
 
-/** Space of responses in dictionary impl */
+/** Space of responses in dictionary impl. */
 pub type Response = u64;
 
 type LfrHasher = SipHasher13;
-type HasherKey = [u8; 16];
+
+/** A key for the SipHash13 hash function. */
+pub type HasherKey = [u8; 16];
 
 type RowIdx   = u64; // if u32 then limit to ~4b rows
 type BlockIdx = u32;
 type LfrBlock = u32;
-const BLOCKSIZE : usize = (LfrBlock::BITS as usize) / 8;
+
+/** The internal block size of the map, in bytes. */
+pub const BLOCKSIZE : usize = (LfrBlock::BITS as usize) / 8;
 const OVERPROVISION : u64 = /* 1/ */ 1024;
 const EXTRA_ROWS : usize = 8;
 
@@ -198,7 +202,11 @@ fn backward_solve(center: &mut BlockGroup, left:&mut BlockGroup, right:&mut Bloc
     }
 }
 
-/** Provision the number of blocks for a given number of rows */
+/**
+ * Return the number of blocks needed for a certain number of (key,value) pairs.
+ *
+ * Internal but maybe informative.
+ */
 pub fn blocks_required(rows:usize) -> usize {
     let mut cols = rows + EXTRA_ROWS;
     if OVERPROVISION > 0 { cols += cols / OVERPROVISION as usize; }
@@ -207,7 +215,10 @@ pub fn blocks_required(rows:usize) -> usize {
     cols / (8*BLOCKSIZE)
 }
 
-/** Either generate a fresh key, or derive one from an existing key and index */
+/**
+ * Utility: either generate a fresh hash key, or derive one from an existing
+ * key and index.
+ */
 pub fn choose_key(base_key: Option<HasherKey>, n:usize) -> HasherKey {
     match base_key {
         None => {
@@ -229,8 +240,9 @@ pub fn choose_key(base_key: Option<HasherKey>, n:usize) -> HasherKey {
     }
 }
 
-/** Core of a mapping object */
-pub struct MapCore {
+/** Untyped core of a mapping object. */
+struct MapCore {
+    /** The number of bits stored per (key,value) pair. */
     pub bits_per_value: usize,
     nblocks: usize,
     blocks: Vec<LfrBlock>,
@@ -371,33 +383,105 @@ impl MapCore {
     }
 }
 
-/** Uniform map */
+/**
+ * Compressed static function of type `T -> u64`.
+ *
+ * These objects can be constructed from a mapping type or vector of
+ * pairs.  They can then be queried with a given `T`; if that `T` was
+ * included in the map during construction, then the corresponding value
+ * will be returned.  Otherwise, an arbitrary value will be returned.
+ */
 pub struct Map<T> {
+    /** The SipHash key used to hash inputs. */
     hash_key: HasherKey,
-    pub core: MapCore,
-    _phantom: PhantomData<T>,
-    pub try_num: usize,
+
+    /** Untyped map object, consulted after hashing. */
+    core: MapCore,
+
+    /** Phantom to hold the type of T */
+    _phantom: PhantomData<T>
 }
 
-/** Approximate set */
+/**
+ * Approximate sets.
+ *
+ * These are a possible replacement for Bloom filters in static contexts.
+ * They store a compressed representation of a set of objects.  From that
+ * representation you can query whether an object is in the set.
+ * 
+ * There is a small, adjustable false positive probability.  There are no
+ * false negatives.  That is, if you query an object that really was in the
+ * set, you will always get `true`.  If you query an ojbect not in the set,
+ * you will usually get `false`, but not always.
+ */
 pub struct ApproxSet<T> {
+    /** The SipHash key used to hash inputs. */
     hash_key: HasherKey,
-    pub core: MapCore,
+
+    /** Untyped map object, consulted after hashing. */
+    core: MapCore,
+
+    /** Phantom to hold the type of T */
     _phantom: PhantomData<T>,
-    pub try_num: usize,
 }
 
-/** Options to build a map */
-#[derive(PartialEq,Eq,Debug,Ord,PartialOrd,Clone,Copy)]
-pub struct BuildOptions {
-    /** Optional key to make building deterministic */
-    key_gen   : Option<HasherKey>, 
+/**
+ * Options to build a Map or ApproxSet.
+ * 
+ * Implements `Default`, so you can get reasonable options
+ * with BuildOptions::default().
+ */
+#[derive(PartialEq,Eq,Debug,Ord,PartialOrd)]
+pub struct BuildOptions{
+    /**
+     * The operation to build a map or approximate set
+     * fails around 1%-10% of the time.  The builder will
+     * automatically try up to this number of times.  I
+     * recommend trying at least 20 times for typical use
+     * cases, so that the failure probability is negligible.
+     *
+     * Note that building will always fail if the keys
+     * are not unique, even if the values are consistent.
+     * For example, `[(1,2),(1,2)]` will always fail to build.
+     * To avoid this, either deduplicate the items yourself,
+     * or pass a HashMap or TreeMap (or HashSet or TreeSet)
+     * to the builder.
+     *
+     * Default: 256.
+     */
+    pub max_tries : usize,
 
-    /** Maximum number of tries, in case building fails */
-    max_tries : usize,
+    /**
+     * Out-parameter from build: on which try did the build
+     * succeed?
+     */
+    pub try_num: usize,
 
-    /** Override the number of bits to return per value. */
-    bits_per_value : Option<u8>    ,
+    /** 
+     * Optional hash key to make building deterministic.
+     * If a key is given, then the actual key used will be
+     * derived from that key and from the try count.
+     * If omitted, a random key will be selected for each try.
+     *
+     * Default: `None`.
+     */
+    pub key_gen   : Option<HasherKey>, 
+
+    /**
+     * Override the number of bits to return per value.
+     * If given, all values will be truncated to that many
+     * bits.  If omitted, the bit length of the largest
+     * input value will be used.
+     * 
+     * When building an ApproxSet, this determines the failure
+     * probability (which is 2^-`bits_per_value`) and the storage
+     * required by the ApproxSet (which is about `bits_per_value`
+     * per element in the set).  For building an ApproxSet, this
+     * defaults to 8.
+     *
+     * Default: `None`.
+     */
+    pub bits_per_value : Option<u8>,
 }
 
 impl Default for BuildOptions {
@@ -405,7 +489,8 @@ impl Default for BuildOptions {
         BuildOptions {
             key_gen : None,
             max_tries : 256,
-            bits_per_value : None
+            bits_per_value : None,
+            try_num: 0
         }
     }
 }
@@ -417,8 +502,20 @@ fn next_power_of_2_ge(x:usize) -> usize {
 }
 
 impl <T:Hash> Map<T> {
-    /** Main API to build a map */
-    pub fn build<'a, Collection>(map: &'a Collection, options: &BuildOptions) -> Option<Self>
+    /**
+     * Build a uniform map.
+     *
+     * This function takes an iterable collection of items `(k,v)` and
+     * constructs a compressed mapping.  If you query `k` on the compressed
+     * mapping, `query` will return the corresponding `v`.  If you query any `k`
+     * not included in the original list, the return value will be arbitrary.
+     *
+     * You can pass a `HashMap<T,u64>`, `BTreeMap<T,u64>` etc.  If you pass a
+     * non-mapping type such as `Vec<(T,u64)>` then be careful: any duplicate
+     * `T` entries will cause the build to fail, possibly after a long time,
+     * even if they have the same u64 associated.
+     */
+    pub fn build<'a, Collection>(map: &'a Collection, options: &mut BuildOptions) -> Option<Self>
     where for<'b> &'b Collection: IntoIterator<Item=(&'b T, &'b Response)>,
           <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator
     {
@@ -444,8 +541,8 @@ impl <T:Hash> Map<T> {
 
             /* Solve it! (with type-independent code) */
             if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
+                options.try_num = try_num;
                 return Some(Self {
-                    try_num: try_num,
                     hash_key: hkey,
                     core: solution,
                     _phantom: PhantomData::default()
@@ -457,8 +554,9 @@ impl <T:Hash> Map<T> {
     }
 
     /**
-     * Query an item in the map.  If (key,v) was included in the iterator when building the map,
-     * then v will be returned.  Otherwise, an arbitrary value will be returned.
+     * Query an item in the map.
+     * If (key,v) was included when building the map, then v will be returned.
+     * Otherwise, an arbitrary value will be returned.
      */
     pub fn query(&self, key: &T) -> u64 {
         self.core.query(hash_object_to_row(&self.hash_key, self.core.nblocks, key))
@@ -469,8 +567,19 @@ impl <T:Hash> ApproxSet<T> {
     /** Default bits per value if none is specified. */
     const DEFAULT_BITS_PER_VALUE : usize = 8;
 
-    /** Main API to build a set */
-    pub fn build<'a, Collection>(set: &'a Collection, options: &BuildOptions) -> Option<Self>
+    /**
+     * Build an approximate set.
+     *
+     * This function takes an iterable collection of items `x` and constructs
+     * a compressed representation of the collection.  If you query `k` on the compressed
+     * mapping, `query` will return the corresponding `v`.  If you query any `k`
+     * not included in the original list, the return value will be arbitrary.
+     *
+     * You can pass a `HashSet<T>`, `BTreeSet<T>` etc.  If you pass a non-set
+     * type such as `Vec<T>` then be careful: any duplicate `T` entries will
+     * cause the build to fail, possibly after a long time.
+     */
+    pub fn build<'a, Collection>(set: &'a Collection, options: &mut BuildOptions) -> Option<Self>
     where for<'b> &'b Collection: IntoIterator<Item=&'b T>,
           <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator
     {
@@ -488,8 +597,8 @@ impl <T:Hash> ApproxSet<T> {
 
             /* Solve it! (with type-independent code) */
             if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
+                options.try_num = try_num;
                 return Some(Self {
-                    try_num: try_num,
                     hash_key: hkey,
                     core: solution,
                     _phantom: PhantomData::default()
@@ -501,8 +610,12 @@ impl <T:Hash> ApproxSet<T> {
     }
 
     /**
-     * Query an item in the set.  If key was included in the iterator when building the set,
-     * then return true.  Otherwise, probably return false.
+     * Query whether an item is in the set.
+     *
+     * If `key` was included in the iterator when building the
+     * `ApproxSet`, then return `true`.  Otherwise, usually return `false`, but there is
+     * a small false positive rate depending on set construction parameters.  Queries,
+     * and thus false positives, are deterministic after the set has been constructed.
      */
     pub fn probably_contains(&self, key: &T) -> bool {
         self.core.query(hash_object_to_row(&self.hash_key, self.core.nblocks, key)) == 0
@@ -524,7 +637,7 @@ mod tests {
             for _j in 0..99*i {
                 map.insert(rng.gen::<u64>(), rng.gen::<u64>());
             }
-            let hiermap = Map::build(&map, &BuildOptions::default()).unwrap();
+            let hiermap = Map::build(&map, &mut BuildOptions::default()).unwrap();
             for (k,v) in map.iter() {
                 assert_eq!(hiermap.query(&k), *v);
             }
@@ -540,7 +653,8 @@ mod tests {
             for _j in 0..99*i {
                 set.insert(rng.gen::<u64>());
             }
-            let hiermap = ApproxSet::build(&set, &BuildOptions::default()).unwrap();
+            
+            let hiermap = ApproxSet::build(&set, &mut BuildOptions::default()).unwrap();
             for k in set.iter() {
                 assert_eq!(hiermap.probably_contains(&k), true);
             }
