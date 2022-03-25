@@ -436,15 +436,15 @@ pub struct BuildOptions{
     /**
      * The operation to build a map or approximate set
      * fails around 1%-10% of the time.  The builder will
-     * automatically try up to this number of times.  I
-     * recommend trying at least 20 times for typical use
+     * automatically try up to this number of times.  It is
+     * recommended to try at least 20 times for typical use
      * cases, so that the failure probability is negligible.
      *
      * Note that building will always fail if the keys
      * are not unique, even if the values are consistent.
      * For example, `[(1,2),(1,2)]` will always fail to build.
      * To avoid this, either deduplicate the items yourself,
-     * or pass a HashMap or TreeMap (or HashSet or TreeSet)
+     * or pass a `HashMap` or `BTreeMap` (or `HashSet` or `BTreeSet`)
      * to the builder.
      *
      * Default: 256.
