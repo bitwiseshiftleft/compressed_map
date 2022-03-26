@@ -1,7 +1,6 @@
 
 # Rust port
 
-* AVX2 code
 * Nonuniform maps
 * Clean up code TODOs
 * Rename functions for clarity
@@ -28,7 +27,7 @@ Also Rust has no threading.
     
 # For release
 
-* Detect vector acceleration
+* Detect vector acceleration instead of compiling it in fixed
 * Stabilize interface and format
 
 ## Testing and documentation
