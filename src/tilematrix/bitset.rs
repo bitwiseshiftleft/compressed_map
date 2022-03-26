@@ -26,6 +26,11 @@ impl BitSet {
         self.set.shrink_to_fit();
     }
 
+    /** Get the n'th word of the set */
+    pub fn word(&self, offset:usize) -> u64 {
+        if offset >= self.set.len() { 0 } else { self.set[offset] }
+    }
+
     /** Set a bit in the set */
     #[inline(always)]
     pub fn insert(&mut self, x:usize) {

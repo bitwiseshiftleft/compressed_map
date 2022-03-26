@@ -17,8 +17,8 @@ but rearranging rows is slower.
 
 Hot spots in the profile:
 
-* interleave_rows (can the setup be vectorized?)
-* partition_rows
+* interleave_rows (add BMI2 version?)
+* partition_rows  (can it be further improved?)
 * pseudoinverse: the current code is optimized for small rows.
 
 We could try the C strategy to reduce rearrangements?  I tried this in branch

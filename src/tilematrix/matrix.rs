@@ -7,7 +7,7 @@
  */
 
 use crate::tilematrix::tile::{Tile,Edge,Index,Permutation,row_mul,row_mul_acc,
-    bulk_swap_rows,bulk_swap2_rows,PERMUTE_ALL_ZERO};
+    bulk_swap_rows,bulk_swap2_rows,PERMUTE_ZERO,PERMUTE_ALL_ZERO};
 use std::cmp::{min,max};
 use std::ops::{AddAssign};
 use rand::{Rng,thread_rng};
@@ -15,8 +15,8 @@ use crate::tilematrix::bitset::BitSet;
 
 /** Return the number of tiles required to represent n rows or columns, rounded up */
 fn tiles_spanning(n:usize) -> usize {
-    let ebits = Tile::EDGE_BITS as usize;
-    (n+ebits-1) / ebits
+    const EBITS:usize = Tile::EDGE_BITS as usize;
+    (n+EBITS-1) / EBITS
 }
 
 /** GF(2) matrix */
@@ -542,33 +542,52 @@ impl Matrix {
      * Doesn't take offsets or want_* because libfrayed doesn't need them
      */
     pub fn partition_rows(&self, rows: &BitSet) -> (Matrix,Matrix) {
+        const EBITS:usize = Tile::EDGE_BITS as usize;
         let tcols = tiles_spanning(self.cols_main) + tiles_spanning(self.cols_aug);
         
         /* Allocate the results */
         let mut yes = Matrix::new(rows.len(),             self.cols_main, self.cols_aug);
         let mut no  = Matrix::new(self.rows - rows.len(), self.cols_main, self.cols_aug);
 
-        let mut util_yes = PartitionUtility::new(true, 0, self.rows);
-        let mut util_no  = PartitionUtility::new(true, 0, self.rows);
+        let mut offset_yes=0;
+        let mut offset_no=0;
+        let mut row_yes=0;
+        let mut row_no=0;
 
-        for row in 0..self.rows {
-            /* Add the current column to the set */
-            if rows.contains(row) {
-                util_yes.coset(row);
+        for trow in 0..tiles_spanning(self.rows) {
+            let setu64 = rows.word(trow / (64/EBITS));
+            let mask = if EBITS == 64 { !0u64 } else { (1u64<<EBITS) -1 };
+            let edge = (setu64 >> ((trow * EBITS) % 64)) & mask;
+            let mask2 = if self.rows - trow*EBITS < EBITS {
+                (1u64 << (self.rows-trow*EBITS)) - 1
             } else {
-                util_no.coset(row);
+                mask
+            };
+            let selfs = edge as Edge;
+            let others = (mask2 ^ edge) as Edge;
+
+            if selfs != 0 {
+                let (s0,s1) = co_edge2perms(selfs, &mut offset_yes);
+                row_mul_acc(&mut yes.tiles[row_yes*yes.stride .. row_yes*yes.stride+tcols], Tile::IDENTITY * &s0,
+                            &self.tiles[trow*self.stride .. trow*self.stride+tcols]);
+                row_yes += offset_yes/EBITS;
+                if offset_yes > EBITS {
+                    row_mul_acc(&mut yes.tiles[row_yes*yes.stride .. row_yes*yes.stride+tcols], Tile::IDENTITY * &s1,
+                                &self.tiles[trow*self.stride .. trow*self.stride+tcols]);
+                }
+                offset_yes %= EBITS;
             }
 
-            if let Some((perm,trow,my_trow)) = util_yes.apply(row) {
-                let perm_id = Tile::IDENTITY * &perm;
-                row_mul_acc(&mut yes.tiles[trow*yes.stride .. trow*yes.stride+tcols], perm_id,
-                            &self.tiles[my_trow*self.stride .. my_trow*self.stride+tcols]);
-            }
-
-            if let Some((perm,trow,my_trow)) = util_no.apply(row) {
-                let perm_id = Tile::IDENTITY * &perm;
-                row_mul_acc(&mut no.tiles[trow*no.stride .. trow*no.stride+tcols], perm_id,
-                            &self.tiles[my_trow*self.stride .. my_trow*self.stride+tcols]);
+            if others != 0 {
+                let (o0,o1) = co_edge2perms(others, &mut offset_no);
+                row_mul_acc(&mut no.tiles[row_no*no.stride .. row_no*no.stride+tcols], Tile::IDENTITY * &o0,
+                            &self.tiles[trow*self.stride .. trow*self.stride+tcols]);
+                row_no += offset_no/EBITS;
+                if offset_no > EBITS {
+                    row_mul_acc(&mut no.tiles[row_no*no.stride .. row_no*no.stride+tcols], Tile::IDENTITY * &o1,
+                                &self.tiles[trow*self.stride .. trow*self.stride+tcols]);
+                }
+                offset_no %= EBITS;
             }
         }
         (yes,no)
@@ -624,6 +643,7 @@ impl Matrix {
      * take the rows from self according to the bitset, or from other.
      */
     pub fn interleave_rows(&self, other: &Matrix, take_from_self: &BitSet) -> Matrix {
+        const EBITS:usize = Tile::EDGE_BITS as usize;
         debug_assert_eq!(take_from_self.len(), self.rows);
         debug_assert_eq!(self.cols_main, other.cols_main);
         debug_assert_eq!(self.cols_aug, other.cols_aug);
@@ -633,27 +653,45 @@ impl Matrix {
         /* Allocate the results */
         let mut result = Matrix::new(self.rows + other.rows, self.cols_main, self.cols_aug);
 
-        let mut util_yes = PartitionUtility::new(true, 0, result.rows);
-        let mut util_no  = PartitionUtility::new(true, 0, result.rows);
+        let mut offset_yes=0;
+        let mut offset_no=0;
+        let mut row_yes=0;
+        let mut row_no=0;
 
-        for row in 0..result.rows {
-            /* Add the current column to the set */
-            if take_from_self.contains(row) {
-                util_yes.set(row);
+        for trow in 0..tiles_spanning(result.rows) {
+            let setu64 = take_from_self.word(trow / (64/EBITS));
+            let mask = if EBITS == 64 { !0u64 } else { (1u64<<EBITS) -1 };
+            let edge = (setu64 >> ((trow * EBITS) % 64)) & mask;
+            let mask2 = if result.rows - trow*EBITS < EBITS {
+                (1u64 << (result.rows-trow*EBITS)) - 1
             } else {
-                util_no.set(row);
+                mask
+            };
+            let selfs = edge as Edge;
+            let others = (mask2 ^ edge) as Edge;
+
+            if selfs != 0 {
+                let (s0,s1) = edge2perms(selfs, &mut offset_yes);
+                row_mul_acc(&mut result.tiles[trow*result.stride .. trow*result.stride+tcols], Tile::IDENTITY * &s0,
+                            &self.tiles[row_yes*self.stride .. row_yes*self.stride+tcols]);
+                row_yes += offset_yes/EBITS;
+                if offset_yes > EBITS {
+                    row_mul_acc(&mut result.tiles[trow*result.stride .. trow*result.stride+tcols], Tile::IDENTITY * &s1,
+                        &self.tiles[row_yes*self.stride .. row_yes*self.stride+tcols]);
+                }
+                offset_yes %= EBITS;
             }
 
-            if let Some((perm,trow,my_trow)) = util_yes.apply(row) {
-                let perm_id = Tile::IDENTITY * &perm;
-                row_mul_acc(&mut result.tiles[my_trow*result.stride .. my_trow*result.stride+tcols], perm_id,
-                            &self.tiles[trow*self.stride .. trow*self.stride+tcols]);
-            }
-
-            if let Some((perm,trow,my_trow)) = util_no.apply(row) {
-                let perm_id = Tile::IDENTITY * &perm;
-                row_mul_acc(&mut result.tiles[my_trow*result.stride .. my_trow*result.stride+tcols], perm_id,
-                            &other.tiles[trow*other.stride .. trow*other.stride+tcols]);
+            if others != 0 {
+                let (o0,o1) = edge2perms(others, &mut offset_no);
+                row_mul_acc(&mut result.tiles[trow*result.stride .. trow*result.stride+tcols], Tile::IDENTITY * &o0,
+                            &other.tiles[row_no*other.stride .. row_no*other.stride+tcols]);
+                row_no += offset_no/EBITS;
+                if offset_no > EBITS {
+                    row_mul_acc(&mut result.tiles[trow*result.stride .. trow*result.stride+tcols], Tile::IDENTITY * &o1,
+                        &other.tiles[row_no*other.stride .. row_no*other.stride+tcols]);
+                }
+                offset_no %= EBITS;
             }
         }
         result
@@ -699,6 +737,7 @@ struct PartitionUtility  {
     total_positions : usize
 }
 
+/* PERF: replace this for partition columns too? */
 impl PartitionUtility {
     /* Create a new PartitionUtility starting from the given position */
     #[inline(always)]
@@ -719,6 +758,7 @@ impl PartitionUtility {
 
     /* As set, but the permutation goes the other way */
     #[inline(always)]
+    #[allow(dead_code)]
     fn coset(&mut self, ipt: usize) {
         self.current[ipt % Tile::EDGE_BITS] = (self.position % Tile::EDGE_BITS) as u8;
         self.position += 1;
@@ -739,6 +779,70 @@ impl PartitionUtility {
         self.current = PERMUTE_ALL_ZERO;
         Some((to_apply,(self.position-1)/Tile::EDGE_BITS,position/Tile::EDGE_BITS))
     }
+}
+
+#[inline]
+/** New partition helper: construct permutations for partitioning rows based on an edge */
+fn edge2perms(mut e:Edge, offset: &mut usize) -> (Permutation,Permutation) {
+    /** PERF: can do this branch-free with PEXT/PDEP from BMI2 */
+    const EBITS : usize = Edge::BITS as usize;
+    assert!(EBITS == 16);
+    let mut perms = [PERMUTE_ZERO; 2*Edge::BITS as usize];
+    while e != 0 {
+        perms[*offset] = e.trailing_zeros() as u8;
+        e &= e-1;
+        *offset += 1;
+    }
+    (perms[0..16].try_into().unwrap(),perms[16..32].try_into().unwrap())
+}
+
+/** Utility to map eg 0b101 to 0x010001 */
+fn transpose1(e:Edge) -> u64 {
+    let e = e as u64;
+    let e = (e & 0xFE).wrapping_mul(0x2040810204081) | e;
+    e & 0x0101010101010101
+}
+
+#[inline]
+/** As edge2perms, but the transposes */
+fn co_edge2perms(mut e:Edge, offset: &mut usize) -> (Permutation,Permutation) {
+    /* Branch-free */
+    debug_assert_eq!(Edge::BITS, 16);
+    const EBITS : usize = Edge::BITS as usize;
+    /*
+    assert!(EBITS == 16);
+    let mut perms = [PERMUTE_ZERO; 2*Edge::BITS as usize];
+    let mut o = *offset;
+    while e != 0 {
+        perms[(e.trailing_zeros() as usize) | (o & EBITS)] = (o % EBITS) as u8;
+        e &= e-1;
+        o += 1;
+    }
+    *offset = o;
+    (perms[0..16].try_into().unwrap(),perms[16..32].try_into().unwrap())
+    */
+    const COMB  : u64 = 0x0101010101010101;
+    const MASK4 : u64 = COMB * 0xF;
+    let lo = transpose1(e & 0xFF);
+    let hi = transpose1(e >> 8);
+    let lo_mask = lo.wrapping_mul(0xFF);
+    let hi_mask = hi.wrapping_mul(0xFF);
+    let lo_mask4 = lo.wrapping_mul(0x0F);
+    let hi_mask4 = hi.wrapping_mul(0x0F);
+    let lo_cumu = (lo+(*offset as u64)).wrapping_mul(COMB);
+    let hi_cumu = (hi+(lo_cumu>>56)).wrapping_mul(COMB);
+    *offset = (hi_cumu >> 56) as usize;
+    let lo_cumu = lo_cumu.wrapping_sub(lo);
+    let hi_cumu = hi_cumu.wrapping_sub(hi);
+    let lo_over = ((lo_cumu>>4) & COMB).wrapping_mul(0xFF);
+    let hi_over = ((hi_cumu>>4) & COMB).wrapping_mul(0xFF);
+    let mut r0 = PERMUTE_ALL_ZERO;
+    let mut r1 = PERMUTE_ALL_ZERO;
+    r0[0.. 8].clone_from_slice(&(!lo_mask |  lo_over | lo_cumu).to_le_bytes());
+    r0[8..16].clone_from_slice(&(!hi_mask |  hi_over | hi_cumu).to_le_bytes());
+    r1[0.. 8].clone_from_slice(&(!lo_mask | !lo_over | (lo_cumu & MASK4)).to_le_bytes());
+    r1[8..16].clone_from_slice(&(!hi_mask | !hi_over | (hi_cumu & MASK4)).to_le_bytes());
+    (r0,r1)
 }
 
 /**************************************************************************
