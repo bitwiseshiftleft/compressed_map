@@ -15,9 +15,13 @@ The Rust version is slower than the C version except for large matrices.
 Internally, the matrix solvers are faster than C (due mainly to larger tiles)
 but rearranging rows is slower.
 
-Hot spots in the profile (TODO: update since partition_rows was removed):
+Hot spots in the profile:
+
 * interleave_rows
+* partition_rows
 * pseudoinverse
+
+We could try the C strategy to reduce rearrangements?
 
 Also Rust has no threading.
     

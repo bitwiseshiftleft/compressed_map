@@ -13,14 +13,14 @@ use std::cmp::{min,Ord,Ordering};
 type Locator = u32;
 type Plan = Locator;
 
-struct ResponseMap<V> {
+struct ResponseMap<T> {
     /**
      * Sorted map: (lower bound, response).
      * All but at most one of widths
      * (i.e. lower bound #i+1 - lower bound i)
      * must be powers of two.
      */
-    responses : Vec<(Locator,V)>
+    responses : Vec<(Locator,T)>
 }
 
 /** Next power of 2 that's less than x; minimum 1 */
@@ -37,7 +37,7 @@ fn floor_power_of_2(x:Locator) -> Locator {
  *
  * Formulate a response map and a 
  */
-fn formulate_plan<V:Clone>(counts: &HashMap<V,usize>) -> (ResponseMap<V>, Plan) {
+fn formulate_plan<T:Clone>(counts: &HashMap<T,usize>) -> (ResponseMap<T>, Plan) {
     /* Deal with special cases */
     let nitems = counts.len();
     if nitems == 0 {

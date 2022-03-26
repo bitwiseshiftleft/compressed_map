@@ -102,22 +102,18 @@ fn hash_object_to_row<T:Hash> (key: &HasherKey, nblocks:usize, t: &T)-> LfrRow {
 /** A block or group of blocks for the hierarchical solver */
 struct BlockGroup {
     contents:   Matrix,
+    row_ids:    Vec<RowIdx>, // with RowIdx::MAX appended for convenience
     solution:   Systematic,
-    empty:      bool,
-    expected_rows: usize,
-    rowids: Vec<(u8,RowIdx)>
+    empty:      bool
 }
 
 impl BlockGroup {
-    fn new(rows: usize, cols: usize, aug: usize, empty:bool) -> BlockGroup {
-        let mut rowids = vec![(0,0);rows+1];
-        rowids[rows] = (u8::MAX,RowIdx::MAX);
+    fn new(cols: usize, aug: usize, empty:bool) -> BlockGroup {
         BlockGroup {
-            contents: Matrix::new(rows, cols, aug),
+            contents: Matrix::new(0, cols, aug),
+            row_ids: Vec::new(),
             solution: Systematic::identity(0),
-            empty: empty,
-            expected_rows: 0, // set later
-            rowids: rowids
+            empty: empty
         }
     }
 }
@@ -130,34 +126,53 @@ impl BlockGroup {
  *
  * Fails if the block group doesn't have full row-rank.
  */
-fn forward_solve(left:&mut BlockGroup, right:&mut BlockGroup, nmerge:usize) -> Option<BlockGroup> {
+fn forward_solve(left:&mut BlockGroup, right:&mut BlockGroup) -> Option<BlockGroup> {
     if right.empty {
-        return Some(replace(left, BlockGroup::new(0,0,0,true)));
+        return Some(replace(left, BlockGroup::new(0,0,true)));
     } else if left.empty {
-        return Some(replace(right, BlockGroup::new(0,0,0,true)));
+        return Some(replace(right, BlockGroup::new(0,0,true)));
     }
 
-    /* Prepare to interleave the rows by ID.  Do this by basically mergesort */
-    let nrows_out = left.contents.rows + right.contents.rows - 2*nmerge;
-    let mut rowids = vec![(0,0); nrows_out+1];
-    rowids[nrows_out] = (u8::MAX,RowIdx::MAX);
-    let mut interleave_left = BitSet::with_capacity(nrows_out);
-    let (mut l,mut r) = (nmerge,nmerge);
-    for rowout in 0..nrows_out {
-        let rl = left.rowids[l];
-        let rr = right.rowids[r];
-        debug_assert!(rl != rr);
-        rowids[rowout] = if rl<rr {
-            l+=1; interleave_left.insert(rowout); rl
+    /* Mergesort the row IDs */
+    let mut left_to_merge = BitSet::with_capacity(left.contents.rows);
+    let mut right_to_merge = BitSet::with_capacity(right.contents.rows);
+    let mut interleave_left = BitSet::with_capacity(left.contents.rows+right.contents.rows);
+    let mut row_ids = Vec::new();
+    row_ids.reserve(left.contents.rows + right.contents.rows); // over-reserve but this isn't the long pole
+    let (mut l, mut r, mut i) = (0,0,0);
+
+    /* There should always be something in the left and right group,
+        * because we appended RowIdx::MAX
+        */
+    while (l < left.contents.rows) || (r < right.contents.rows) {
+        if left.row_ids[l] == right.row_ids[r] {
+            left_to_merge.insert(l);
+            right_to_merge.insert(r);
+            l += 1;
+            r += 1;
+        } else if left.row_ids[l] < right.row_ids[r] {
+            row_ids.push(left.row_ids[l]);
+            interleave_left.insert(i);
+            l += 1;
+            i += 1;
         } else {
-            r+=1; rr
+            row_ids.push(right.row_ids[r]);
+            r += 1;
+            i += 1;
         }
     }
+    row_ids.push(RowIdx::MAX);
+
+    /* Memory efficiency: drop the row IDs */
+    left.row_ids.clear();
+    left.row_ids.shrink_to_fit();
+    right.row_ids.clear();
+    right.row_ids.shrink_to_fit();
 
     /* Sort out the rows */
-    let (lmerge,lkeep) = left.contents.split_at_row(nmerge);
+    let (lmerge,lkeep) = left.contents.partition_rows(&left_to_merge);
     left.contents.clear();
-    let (rmerge,rkeep) = right.contents.split_at_row(nmerge);
+    let (rmerge,rkeep) = right.contents.partition_rows(&right_to_merge);
     right.contents.clear();
 
     /* Merge and solve */
@@ -167,7 +182,7 @@ fn forward_solve(left:&mut BlockGroup, right:&mut BlockGroup, nmerge:usize) -> O
     let rproj = solution.project_out(&rkeep, false);
     let interleaved = lproj.interleave_rows(&rproj, &interleave_left);
 
-    Some(BlockGroup { contents: interleaved, solution: solution, empty:false, expected_rows:0, rowids:rowids })
+    Some(BlockGroup { contents: interleaved, row_ids: row_ids, solution: solution, empty:false })
 }
 
 /**
@@ -180,10 +195,10 @@ fn backward_solve(center: &mut BlockGroup, left:&mut BlockGroup, right:&mut Bloc
 
     if right.empty {
         left.contents = contents;
-        *center = BlockGroup::new(0,0,0,true);
+        *center = BlockGroup::new(0,0,true);
     } else {
         (left.contents, right.contents) = contents.split_at_row(left.solution.rhs.cols_main);
-        *center = BlockGroup::new(0,0,0,true);
+        *center = BlockGroup::new(0,0,true);
     }
 }
 
@@ -198,12 +213,6 @@ pub fn blocks_required(rows:usize) -> usize {
     cols += 8*BLOCKSIZE-1;
     cols = max(cols, 16*BLOCKSIZE);
     cols / (8*BLOCKSIZE)
-}
-
-/** At which level will this row be resolved by the solver? */
-fn resolution(row:&LfrRow) -> u8 {
-    let delta = row.block_positions[0] ^ row.block_positions[1];
-    (BlockIdx::BITS - 1 - delta.leading_zeros()) as u8
 }
 
 /**
@@ -256,9 +265,8 @@ impl MapCore {
         while halfstride < nblocks {
             let mut pos = 2*halfstride;
             while pos < blocks.len() {
-                let nmerge = blocks[pos].expected_rows;
                 let (l,r) = blocks.split_at_mut(pos);
-                blocks[pos] = forward_solve(&mut l[pos-halfstride], &mut r[halfstride], nmerge)?;
+                blocks[pos] = forward_solve(&mut l[pos-halfstride], &mut r[halfstride])?;
                 pos += 4*halfstride;
             }
             halfstride *= 2;
@@ -266,11 +274,10 @@ impl MapCore {
 
         /* Initialize solution at random */
         let naug = blocks[halfstride].solution.rhs.cols_aug;
-        let final_nrows = blocks[halfstride].solution.rhs.cols_main;
-        let mut seed = Matrix::new(final_nrows,0,naug);
+        let mut seed = Matrix::new(0,0,naug);
         let empty = [];
-        for row in 0..final_nrows {
-            seed.mut_set_row_as_bytes(row, &empty, &MapCore::seed_row(hash_key, naug, row));
+        for row in 0..blocks[halfstride].solution.rhs.cols_main {
+            seed.mut_add_row_as_bytes(&empty, &MapCore::seed_row(hash_key, naug, row));
         }
         blocks[halfstride].contents = seed;
 
@@ -313,79 +320,46 @@ impl MapCore {
         })
     }
 
-    /** Try once to build from a vector of hashed items. */
-    fn build_from_vec(
-        vec: Vec<LfrRow>,
+    /** Try once to build from an iterator. */
+    fn build_from_iter(
+        iter: &mut dyn ExactSizeIterator<Item=LfrRow>,
         bits_per_value:usize,
         hash_key:&HasherKey
     ) -> Option<MapCore> {
-        let nitems = vec.len();
+        let nitems = iter.len();
         let mask = if bits_per_value == Response::BITS as usize { !0 }
             else { (1<<bits_per_value)-1 };
         let nblocks = blocks_required(nitems);
         let nblocks_po2 = next_power_of_2_ge(nblocks);
-        let n_resolutions = (usize::BITS - (nblocks-1).leading_zeros() + 1) as usize;
         const BYTES_PER_VALUE : usize = (Response::BITS as usize) / 8;
-
-        /* Count the number of vectors in each block with each resolution */
-        let mut block_res : Vec<Vec<RowIdx>> = (0..nblocks).map(|_| vec![0;n_resolutions]).collect();
-        for row in &vec {
-            let res = resolution(&row);
-            block_res[row.block_positions[0] as usize][res as usize] += 1;
-            block_res[row.block_positions[1] as usize][res as usize] += 1;
-        }
-
-
-        /* Set expected rows */
-        let mut block_expected_rows = vec![0;nblocks_po2];
-        for b in 0..nblocks {
-            for r in 0..n_resolutions-1 {
-                let j = 1<<r;
-                if (b&j) == 0 {
-                    let idx = (b&!(j-1)) + j;
-                    block_expected_rows[idx] += block_res[b][r] as usize;
-                } 
-            }
-        }
-
-        /* Cumulative sum */
-        for b in 0..nblocks {
-            let mut total=0;
-            for r in 0..n_resolutions {
-                let tmp = block_res[b][r];
-                block_res[b][r] = total;
-                total += tmp;
-            }
-        }
 
         /* Create the blocks */
         let mut blocks : Vec<BlockGroup> = (0..nblocks_po2*2).map(|i|
             if ((i&1) != 0) && i < 2*nblocks {
-                let nrows_blk = block_res[i/2][n_resolutions-1];
-                BlockGroup::new(nrows_blk as usize,BLOCKSIZE*8, bits_per_value, false)
-            } else {
-                let mut ret = BlockGroup::new(0,0,0,true);
-                ret.expected_rows = block_expected_rows[i/2];
+                let mut ret = BlockGroup::new(BLOCKSIZE*8, bits_per_value, false);
+                ret.row_ids.reserve(BLOCKSIZE*8*2 * 5/4);
+                ret.contents.reserve_rows(BLOCKSIZE*8*2 * 5/4);
                 ret
+            } else {
+                BlockGroup::new(0,0,true)
             }
         ).collect();
 
-        let mut which_row = 0;
-        for row in vec {
+        let mut rowi=0;
+        for row in iter {
             for i in [0,1] {
                 let blki = row.block_positions[i] as usize;
                 let blk = &mut blocks[2*blki+1];
-                let blkres = &mut block_res[blki];
-                let res = resolution(&row);
-                let rowid = blkres[res as usize];
-                blkres[res as usize] += 1;
                 let aug_bytes = if i==0 { [0u8; BYTES_PER_VALUE] }
                     else { (row.augmented & mask).to_le_bytes() };
-                blk.contents.mut_set_row_as_bytes(rowid as usize,&row.block_key[i].to_le_bytes(), &aug_bytes);
-                blk.rowids[rowid as usize] = (res,which_row);
+                blk.contents.mut_add_row_as_bytes(&row.block_key[i].to_le_bytes(), &aug_bytes);
+                blk.row_ids.push(rowi);
             }
-            which_row += 1;
+            rowi += 1;
         }
+
+        /* Append guard rowidx */
+        for blk in &mut blocks { blk.row_ids.push(RowIdx::MAX); }
 
         /* Solve it */
         Self::build(blocks, nblocks, hash_key)
@@ -559,14 +533,14 @@ impl <T:Hash> Map<T> {
             let hkey = choose_key(options.key_gen, try_num);
             let iter1 = map.into_iter();
             let nblocks = blocks_required(iter1.len());
-            let vec = iter1.map(|(k,v)| {
+            let mut iter = iter1.map(|(k,v)| {
                 let mut row = hash_object_to_row(&hkey,nblocks,k);
                 row.augmented ^= v;
                 row
-            }).collect();
+            });
 
             /* Solve it! (with type-independent code) */
-            if let Some(solution) = MapCore::build_from_vec(vec, bits_per_value, &hkey) {
+            if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
                 options.try_num = try_num;
                 return Some(Self {
                     hash_key: hkey,
@@ -619,10 +593,10 @@ impl <T:Hash> ApproxSet<T> {
             let hkey = choose_key(options.key_gen, try_num);
             let iter1 = set.into_iter();
             let nblocks = blocks_required(iter1.len());
-            let vec = iter1.map(|k| hash_object_to_row(&hkey,nblocks,k)).collect();
+            let mut iter = iter1.map(|k| hash_object_to_row(&hkey,nblocks,k) );
 
             /* Solve it! (with type-independent code) */
-            if let Some(solution) = MapCore::build_from_vec(vec, bits_per_value, &hkey) {
+            if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
                 options.try_num = try_num;
                 return Some(Self {
                     hash_key: hkey,
@@ -691,7 +665,7 @@ mod tests {
             for _ in 0..ntries {
                 false_positives += hiermap.probably_contains(&rng.gen::<u64>()) as usize;
             }
-            // 4 standard deviations
+            // println!("{} false positives", false_positives);
             assert!((false_positives as f64) < mu + 4.*mu.sqrt());
         }
     }

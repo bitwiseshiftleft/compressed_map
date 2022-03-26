@@ -49,13 +49,18 @@ impl Matrix {
     }
 
     /** Add a row as a little-endian collection of bytes */
-    pub fn mut_set_row_as_bytes(&mut self, row:Index, bytes_main:&[u8], bytes_aug:&[u8]) {
+    pub fn mut_add_row_as_bytes(&mut self, bytes_main:&[u8], bytes_aug:&[u8]) {
         const EDGE_BYTES : usize = Tile::EDGE_BITS / 8;
-        debug_assert!(row < self.rows);
         debug_assert!(bytes_main.len() >=  (self.cols_main+7)/8);
         debug_assert!(bytes_aug.len()  >=  (self.cols_aug +7)/8);
         debug_assert!(bytes_aug.len()  % EDGE_BYTES == 0);
         debug_assert!(bytes_main.len() % EDGE_BYTES == 0);
+
+        let row = self.rows;
+        if self.rows % Tile::EDGE_BITS == 0 {
+            self.tiles.resize(self.tiles.len() + self.stride, Tile::ZERO);
+        }
+        self.rows += 1;
 
         let trow = row/Tile::EDGE_BITS;
         let row_within = row % Tile::EDGE_BITS;
@@ -104,6 +109,11 @@ impl Matrix {
                     other.tiles[trow*other.stride+off_other+taug];
             }
         }
+    }
+
+    /** Reserve memory for extra rows */
+    pub fn reserve_rows(&mut self, additional:usize) {
+        self.tiles.reserve(self.stride * tiles_spanning(additional));
     }
 
     /** Return a single bit of the matrix */
@@ -529,10 +539,8 @@ impl Matrix {
      * Splits self into two matrices, nondestructively.  The first will contain those rows
      * which are in the set, and the second those which are not.
      * 
-     * Doesn't take offsets or want_* because libfrayed doesn't need them.
-     * Actually, currently unused completely (TODO: remove);
+     * Doesn't take offsets or want_* because libfrayed doesn't need them
      */
-    #[allow(dead_code)]
     pub fn partition_rows(&self, rows: &BitSet) -> (Matrix,Matrix) {
         let tcols = tiles_spanning(self.cols_main) + tiles_spanning(self.cols_aug);
         
