@@ -73,15 +73,15 @@ impl Tile {
     /** Return the transpose of a storage sub tile */
     fn transpose1(a:Storage) -> Storage {
         let a = (a & 0xF0F0F0F00F0F0F0F)
-        | (a.wrapping_shl(28) & 0x0F0F0F0F00000000)
+        | ((a << 28) & 0x0F0F0F0F00000000)
         | ((a & 0x0F0F0F0F00000000)>>28); // transpose blocks of size 4
 
         let a = (a & 0xCCCC3333CCCC3333)
-        | (a.wrapping_shl(14) & 0x3333000033330000)
+        | ((a << 14) & 0x3333000033330000)
         | ((a & 0x3333000033330000)>>14); // size 2
 
         let a = (a & 0xAA55AA55AA55AA55)
-        | (a.wrapping_shl(7) & 0x5500550055005500)
+        | ((a << 7) & 0x5500550055005500)
         | ((a & 0x5500550055005500)>>7); // size 1
 
         a
@@ -122,7 +122,7 @@ impl Tile {
 
     fn broadcast_row1(storage:Storage, row:Index) -> Storage {
         let a = (storage>>row) & ROW_MASK;
-        a.wrapping_shl(8).wrapping_sub(a)
+        (a << SUBTILE_DIM).wrapping_sub(a)
     }
 
     /** Return a tile where all rows are copies of the selected one */
@@ -244,16 +244,16 @@ impl Tile {
             for col in 0..LINEAR_DIM {
                 let sub = self.storage[rowa1*LINEAR_DIM+col];
                 let sub = (sub & !ma & !mb)
-                        | (mb & (sub >> rowa0).wrapping_shl(rowb0 as u32))
-                        | (ma & (sub >> rowb0).wrapping_shl(rowa0 as u32));
+                        | (mb & ((sub >> rowa0) << rowb0))
+                        | (ma & ((sub >> rowb0) << rowa0));
                 self.storage[rowa1*LINEAR_DIM+col] = sub;
             }
         } else {
             for col in 0..LINEAR_DIM {
                 let suba = self.storage[rowa1*LINEAR_DIM+col];
                 let subb = self.storage[rowb1*LINEAR_DIM+col];
-                self.storage[rowa1*LINEAR_DIM+col] = (suba & !ma) | ((subb >> rowb0).wrapping_shl(rowa0 as u32) & ma);
-                self.storage[rowb1*LINEAR_DIM+col] = (subb & !mb) | ((suba >> rowa0).wrapping_shl(rowb0 as u32) & mb);
+                self.storage[rowa1*LINEAR_DIM+col] = (suba & !ma) | (((subb >> rowb0) << rowa0) & ma);
+                self.storage[rowb1*LINEAR_DIM+col] = (subb & !mb) | (((suba >> rowa0) << rowb0) & mb);
             }
         }
     }
@@ -273,10 +273,7 @@ impl Tile {
         self.mut_permute_columns(&perm);
     }
 
-    /** Extract self.cols[colb..colb+ncols] as cola..cola+ncols 
-     * PERF: This is only called on IDENTITY.  Should we make an
-     * IDENTITY_SHIFTED function?
-     */
+    /** Extract self.cols[colb..colb+ncols] as cola..cola+ncols */
     pub fn extract_cols(&self, cola:Index, colb:Index, ncols:usize) -> Tile {
         /* PERF: vectorize? */
         let mut permo = PERMUTE_ALL_ZERO;
@@ -286,6 +283,20 @@ impl Tile {
             }
         }
         *self * &permo
+    }
+
+    /** Self ^= colb of b moved to cola.  Used to implement permutations. */
+    #[allow(dead_code)]
+    pub fn mut_xor_col(&mut self, b: &Tile, cola:Index, colb:Index) {
+        let (cola0,cola1) = (cola%SUBTILE_DIM, cola/SUBTILE_DIM);
+        let (colb0,colb1) = (colb%SUBTILE_DIM, colb/SUBTILE_DIM);
+        for row in 0..LINEAR_DIM {
+            self.storage[row*LINEAR_DIM+cola1] ^=
+                (b.storage[row*LINEAR_DIM+colb1]
+                    >> (colb0*SUBTILE_DIM)
+                    & COL_MASK)
+                    << (cola0*SUBTILE_DIM);
+        }
     }
 
     /** Get the index of the first nonzero entry in a column. */
@@ -448,11 +459,27 @@ impl Distribution<Tile> for Standard {
  **************************************************************************/
 #[cfg(not(any(target_arch="aarch64",target_feature="avx2")))]
 pub mod vectorized {
-    use crate::tile::{Tile,Permutation};
+    use crate::tile::{Tile,Permutation,PERMUTE_ZERO,PERMUTE_ALL_ZERO,Index};
     pub type MulTable = Tile;
     pub fn compile_mul_table(a:Tile) -> MulTable { a }
-    pub fn mut_permute_columns(a:&mut Tile, permutation:&Permutation) { panic!("TODO"); }
-    pub fn compose_permutations(perm1:&Permutation, perm2:&Permutation) -> Permutation { panic!("TODO"); }
+    pub fn mut_permute_columns(a:&mut Tile, permutation:&Permutation) {
+        let mut ret = Tile::ZERO;
+        for i in 0..Tile::EDGE_BITS {
+            if permutation[i] != PERMUTE_ZERO {
+                ret.mut_xor_col(a,i,permutation[i] as Index);
+            }
+        }
+        *a = ret;
+    }
+    pub fn compose_permutations(perm1:&Permutation, perm2:&Permutation) -> Permutation {
+        let mut ret = PERMUTE_ALL_ZERO;
+        for i in 0..Tile::EDGE_BITS {
+            if perm1[i] != PERMUTE_ZERO {
+                ret[i] = perm2[perm1[i] as usize];
+            }
+        }
+        ret
+    }
 }
 
 #[cfg(all(target_arch="aarch64"))]
