@@ -507,8 +507,8 @@ impl Matrix {
         /* Count how many columns would be added before this one. */
         let offset_yes = columns.count_within(0..columns_before);
         let offset_no = columns_before - offset_yes;
-        let mut util_yes = PartitionUtility::<Permutation>::new(want_yes, offset_yes, self.cols_main);
-        let mut util_no  = PartitionUtility::<Permutation>::new(want_no,  offset_no,  self.cols_main);
+        let mut util_yes = PartitionUtility::new(want_yes, offset_yes, self.cols_main);
+        let mut util_no  = PartitionUtility::new(want_no,  offset_no,  self.cols_main);
 
         for col in 0..self.cols_main {
             /* Add the current column to the set */
@@ -548,24 +548,26 @@ impl Matrix {
         let mut yes = Matrix::new(rows.len(),             self.cols_main, self.cols_aug);
         let mut no  = Matrix::new(self.rows - rows.len(), self.cols_main, self.cols_aug);
 
-        let mut util_yes = PartitionUtility::<Tile>::new(true, 0, self.rows);
-        let mut util_no  = PartitionUtility::<Tile>::new(true, 0, self.rows);
+        let mut util_yes = PartitionUtility::new(true, 0, self.rows);
+        let mut util_no  = PartitionUtility::new(true, 0, self.rows);
 
         for row in 0..self.rows {
             /* Add the current column to the set */
             if rows.contains(row) {
-                util_yes.set(row);
+                util_yes.coset(row);
             } else {
-                util_no.set(row);
+                util_no.coset(row);
             }
 
             if let Some((perm,trow,my_trow)) = util_yes.apply(row) {
-                row_mul_acc(&mut yes.tiles[trow*yes.stride .. trow*yes.stride+tcols], perm,
+                let perm_id = Tile::IDENTITY * &perm;
+                row_mul_acc(&mut yes.tiles[trow*yes.stride .. trow*yes.stride+tcols], perm_id,
                             &self.tiles[my_trow*self.stride .. my_trow*self.stride+tcols]);
             }
 
             if let Some((perm,trow,my_trow)) = util_no.apply(row) {
-                row_mul_acc(&mut no.tiles[trow*no.stride .. trow*no.stride+tcols], perm,
+                let perm_id = Tile::IDENTITY * &perm;
+                row_mul_acc(&mut no.tiles[trow*no.stride .. trow*no.stride+tcols], perm_id,
                             &self.tiles[my_trow*self.stride .. my_trow*self.stride+tcols]);
             }
         }
@@ -631,24 +633,26 @@ impl Matrix {
         /* Allocate the results */
         let mut result = Matrix::new(self.rows + other.rows, self.cols_main, self.cols_aug);
 
-        let mut util_yes = PartitionUtility::<Tile>::new(true, 0, result.rows);
-        let mut util_no  = PartitionUtility::<Tile>::new(true, 0, result.rows);
+        let mut util_yes = PartitionUtility::new(true, 0, result.rows);
+        let mut util_no  = PartitionUtility::new(true, 0, result.rows);
 
         for row in 0..result.rows {
             /* Add the current column to the set */
             if take_from_self.contains(row) {
-                util_yes.coset(row);
+                util_yes.set(row);
             } else {
-                util_no.coset(row);
+                util_no.set(row);
             }
 
             if let Some((perm,trow,my_trow)) = util_yes.apply(row) {
-                row_mul_acc(&mut result.tiles[my_trow*result.stride .. my_trow*result.stride+tcols], perm,
+                let perm_id = Tile::IDENTITY * &perm;
+                row_mul_acc(&mut result.tiles[my_trow*result.stride .. my_trow*result.stride+tcols], perm_id,
                             &self.tiles[trow*self.stride .. trow*self.stride+tcols]);
             }
 
             if let Some((perm,trow,my_trow)) = util_no.apply(row) {
-                row_mul_acc(&mut result.tiles[my_trow*result.stride .. my_trow*result.stride+tcols], perm,
+                let perm_id = Tile::IDENTITY * &perm;
+                row_mul_acc(&mut result.tiles[my_trow*result.stride .. my_trow*result.stride+tcols], perm_id,
                             &other.tiles[trow*other.stride .. trow*other.stride+tcols]);
             }
         }
@@ -682,41 +686,24 @@ impl AddAssign<&Matrix> for Matrix {
 /**************************************************************************
  * Partitioning utility
  **************************************************************************/
-/** Some way to permute a tile */
-trait PermLike {
-    const EMPTY : Self;
-    fn set(&mut self, from: usize, to:usize);
-}
-
-impl PermLike for Tile {
-    const EMPTY : Tile = Tile::ZERO;
-    #[inline(always)]
-    fn set(&mut self, from:usize, to:usize) { self.set_bit(from,to); }
-}
-
-impl PermLike for Permutation {
-    const EMPTY : Permutation = PERMUTE_ALL_ZERO;
-    #[inline(always)]
-    fn set(&mut self, from:usize, to:usize) { self[from] = to as u8; }
-}
 
 /**
  * Structure for tracking the current state of partitioning / interleaving
  * rows/columns of a matrix.
  */
-struct PartitionUtility<P>  {
+struct PartitionUtility  {
     want : bool, /* are we even using this? */
     nonempty : bool,
-    current : P,
+    current : Permutation,
     position : usize,
     total_positions : usize
 }
 
-impl <P: PermLike+Copy> PartitionUtility<P> {
+impl PartitionUtility {
     /* Create a new PartitionUtility starting from the given position */
     #[inline(always)]
     fn new(want:bool, start_position:usize, total_positions:usize) -> Self {
-        Self { want:want, nonempty:false, current : P::EMPTY,
+        Self { want:want, nonempty:false, current : PERMUTE_ALL_ZERO,
             position: start_position,
             total_positions:total_positions
         }
@@ -725,7 +712,7 @@ impl <P: PermLike+Copy> PartitionUtility<P> {
     /* Mark a row/column to be moved */
     #[inline(always)]
     fn set(&mut self, ipt: usize) {
-        self.current.set(self.position % Tile::EDGE_BITS, ipt % Tile::EDGE_BITS);
+        self.current[self.position % Tile::EDGE_BITS] = (ipt % Tile::EDGE_BITS) as u8;
         self.nonempty = self.want;
         self.position += 1;
     }
@@ -733,14 +720,14 @@ impl <P: PermLike+Copy> PartitionUtility<P> {
     /* As set, but the permutation goes the other way */
     #[inline(always)]
     fn coset(&mut self, ipt: usize) {
-        self.current.set(ipt % Tile::EDGE_BITS, self.position % Tile::EDGE_BITS);
+        self.current[ipt % Tile::EDGE_BITS] = (self.position % Tile::EDGE_BITS) as u8;
         self.position += 1;
         self.nonempty = self.want;
     }
 
     /* Do we need to apply it now?  If so, return what to apply, and to which tile */
     #[inline(always)]
-    fn apply(&mut self, position: usize) -> Option<(P,usize,usize)> {
+    fn apply(&mut self, position: usize) -> Option<(Permutation,usize,usize)> {
         if !self.nonempty
             ||     ((position+1) != self.total_positions
                  && (position+1)  % Tile::EDGE_BITS != 0
@@ -749,7 +736,7 @@ impl <P: PermLike+Copy> PartitionUtility<P> {
         }
         self.nonempty = false;
         let to_apply = self.current;
-        self.current = P::EMPTY;
+        self.current = PERMUTE_ALL_ZERO;
         Some((to_apply,(self.position-1)/Tile::EDGE_BITS,position/Tile::EDGE_BITS))
     }
 }

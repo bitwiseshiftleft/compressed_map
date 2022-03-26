@@ -14,6 +14,12 @@ type Locator = u32;
 type Plan = Locator;
 
 struct ResponseMap<T> {
+    /**
+     * Sorted map: (lower bound, response).
+     * All but at most one of widths
+     * (i.e. lower bound #i+1 - lower bound i)
+     * must be powers of two.
+     */
     responses : Vec<(Locator,T)>
 }
 
