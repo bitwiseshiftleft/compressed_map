@@ -30,4 +30,14 @@ pub mod tilematrix;
  */
 pub mod uniform;
 
+/**
+ * Non-uniform static functions.
+ *
+ * These functions also compress dictionaries `K -> u64`, where `K:Hash`.
+ * They operate like uniform dictionaries, except that they can take advantage
+ * of a skewed distribution in the values.  Asymptotically, this results in a
+ * data structure within 11% of the Shannon entropy of the values.
+ */
+pub mod nonuniform;
+
 use tilematrix::tile;
