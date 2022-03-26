@@ -17,11 +17,14 @@ but rearranging rows is slower.
 
 Hot spots in the profile:
 
-* interleave_rows
+* interleave_rows (can the setup be vectorized?)
 * partition_rows
-* pseudoinverse
+* pseudoinverse: the current code is optimized for small rows.
 
-We could try the C strategy to reduce rearrangements?
+We could try the C strategy to reduce rearrangements?  I tried this in branch
+cstrat.  It's faster for small n, especially on M1.  However for large n, especially
+on Intel, it isn't.  Maybe it's harder on the CPU cache due to the larger
+number of random row writes?
 
 Also Rust has no threading.
     
