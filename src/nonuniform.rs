@@ -42,7 +42,6 @@ fn formulate_plan<T:Clone>(counts: &HashMap<T,usize>) -> (ResponseMap<T>, Plan) 
         return (ResponseMap{responses:resp},0);
     }
 
-
     /* Count the weighted total number of items */
     let mut total = 0;
     for v in counts.values() { total += v; }
