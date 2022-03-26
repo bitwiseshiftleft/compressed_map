@@ -805,12 +805,10 @@ fn transpose1(e:Edge) -> u64 {
 
 #[inline]
 /** As edge2perms, but the transposes */
-fn co_edge2perms(mut e:Edge, offset: &mut usize) -> (Permutation,Permutation) {
+fn co_edge2perms(e:Edge, offset: &mut usize) -> (Permutation,Permutation) {
     /* Branch-free */
     debug_assert_eq!(Edge::BITS, 16);
-    const EBITS : usize = Edge::BITS as usize;
     /*
-    assert!(EBITS == 16);
     let mut perms = [PERMUTE_ZERO; 2*Edge::BITS as usize];
     let mut o = *offset;
     while e != 0 {
@@ -827,8 +825,6 @@ fn co_edge2perms(mut e:Edge, offset: &mut usize) -> (Permutation,Permutation) {
     let hi = transpose1(e >> 8);
     let lo_mask = lo.wrapping_mul(0xFF);
     let hi_mask = hi.wrapping_mul(0xFF);
-    let lo_mask4 = lo.wrapping_mul(0x0F);
-    let hi_mask4 = hi.wrapping_mul(0x0F);
     let lo_cumu = (lo+(*offset as u64)).wrapping_mul(COMB);
     let hi_cumu = (hi+(lo_cumu>>56)).wrapping_mul(COMB);
     *offset = (hi_cumu >> 56) as usize;
