@@ -457,7 +457,7 @@ impl Distribution<Tile> for Standard {
  * TODO: port the avx2 version
  * TODO: feature gate intrinsic versions
  **************************************************************************/
-#[cfg(not(any(target_arch="aarch64",target_feature="avx2")))]
+#[cfg(not(any(target_arch="aarch64",all(target_arch="x86_64",target_feature="avx2"))))]
 pub mod vectorized {
     use crate::tile::{Tile,Permutation,PERMUTE_ZERO,PERMUTE_ALL_ZERO,Index};
     pub type MulTable = Tile;
@@ -479,6 +479,103 @@ pub mod vectorized {
             }
         }
         ret
+    }
+}
+
+
+#[cfg(all(target_arch="x86_64",target_feature="avx2"))]
+pub mod vectorized {
+    use std::ops::Mul;
+    use crate::tile::{Tile,Permutation,PERMUTE_ZERO,PERMUTE_ALL_ZERO,STORAGE_PER};
+    use core::arch::x86_64::*;
+
+    #[derive(Clone,Copy)]
+    pub struct MulTable {
+        table : [__m256i; 4]
+    }
+
+    /** "Permute" columns of the tile according to "permutation".
+     * New column x = old column permutation(x).
+     * ("permutation" need not actually be a permutation)
+     * Any value greater than 0xF (in particular, PERMUTE_ZERO)
+     * will result in the column becoming zero.
+     * 
+     * PERF: adding a permute2 would improve performance for certain column
+     * ops on neon, but possibly not on AVX2
+     */
+    pub fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
+        unsafe {
+            let addr = permutation as *const u8 as *const __m128i;
+            let vperm = _mm256_loadu2_m128i(addr,addr);
+            let ab = _mm256_loadu_si256(&t.storage[0] as *const u64 as *const __m256i);
+            let ab = _mm256_shuffle_epi8(ab,vperm);
+            _mm256_storeu_si256(&mut t.storage[0] as *mut u64 as *mut __m256i, ab);
+        }
+    }
+
+    pub fn compose_permutations(perm1:&Permutation, perm2:&Permutation) -> Permutation {
+        unsafe {
+            let mut ret:Permutation = PERMUTE_ALL_ZERO;
+            let z = _mm_set1_epi8(PERMUTE_ZERO as i8);
+            let vperm1 = _mm_loadu_si128(perm1 as *const u8 as *const __m128i);
+            let vperm2 = _mm_loadu_si128(perm2 as *const u8 as *const __m128i);
+            let vperm12 = _mm_xor_si128(z,_mm_shuffle_epi8(_mm_xor_si128(z,vperm2),vperm1));
+            _mm_storeu_si128(&mut ret[0] as *mut u8 as *mut __m128i, vperm12);
+            ret
+        }
+    }
+
+    /** Precompute multiples of a tile in order to speed up vectorized multiplication */
+    pub fn compile_mul_table(t:Tile) -> MulTable {
+        unsafe {
+            let mut abcd = _mm256_loadu_si256(&t.storage[0] as *const u64 as *const __m256i);
+            let index = _mm256_set_epi64x(0x0F0E0D0C0B0A0908,0x0706050403020100,
+                                          0x0F0E0D0C0B0A0908,0x0706050403020100);
+            let lane0 = _mm256_setzero_si256();
+            let lane4 = _mm256_set1_epi8(4);
+            let lane8 = _mm256_set1_epi8(8);
+            let lane12 = _mm256_set1_epi8(12);
+            let mut one  = _mm256_set1_epi8(1);
+            let mut aclo = _mm256_setzero_si256();
+            let mut achi = _mm256_setzero_si256();
+            let mut bdlo = _mm256_setzero_si256();
+            let mut bdhi = _mm256_setzero_si256();
+            for _ in 0..4 {
+                let tlo = _mm256_cmpeq_epi8(_mm256_and_si256(index,  one), one);
+                one  = _mm256_slli_epi16(one,1);
+                aclo = _mm256_xor_si256(aclo,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane0),tlo));
+                achi = _mm256_xor_si256(achi,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane4),tlo));
+                bdlo = _mm256_xor_si256(bdlo,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane8),tlo));
+                bdhi = _mm256_xor_si256(bdhi,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane12),tlo));
+                abcd = _mm256_srli_epi64(abcd,8);
+            }
+            let adlo = _mm256_permute2x128_si256(aclo,bdlo,0x30);
+            let adhi = _mm256_permute2x128_si256(achi,bdhi,0x30);
+            let cblo = _mm256_permute2x128_si256(aclo,bdlo,0x21);
+            let cbhi = _mm256_permute2x128_si256(achi,bdhi,0x21);
+            MulTable { table : [ adlo, adhi, cblo, cbhi ] }
+        }
+    }
+
+    impl Mul<Tile> for MulTable {
+        type Output = Tile;
+        fn mul(self, tv: Tile) -> Tile {
+            let mut ret = [0u64; STORAGE_PER];
+            unsafe {
+                let low_nibble = _mm256_set1_epi8(0xF);
+                let vec = _mm256_loadu_si256(&tv.storage[0] as *const u64 as  *const __m256i);
+                let veclo = _mm256_and_si256(vec, low_nibble);
+                let vechi = _mm256_and_si256(_mm256_srli_epi16(vec,4), low_nibble);
+                let [adlo,adhi,cblo,cbhi] = self.table;
+                let ad = _mm256_xor_si256(_mm256_shuffle_epi8(adlo, veclo),
+                                          _mm256_shuffle_epi8(adhi, vechi));
+                let cb = _mm256_xor_si256(_mm256_shuffle_epi8(cblo, veclo),
+                                          _mm256_shuffle_epi8(cbhi, vechi));
+                let vret = _mm256_xor_si256(_mm256_permute2x128_si256(cb,cb,1), ad);
+                _mm256_storeu_si256(&mut ret[0] as *mut u64 as *mut __m256i, vret);
+            }
+            Tile { storage : ret }
+        }
     }
 }
 
@@ -803,8 +900,8 @@ mod tests {
                     let tmp = thread_rng().gen_range(0..Tile::EDGE_BITS) as u8;
                     q[i] = tmp as u8;
                 };
-                assert_eq!((t*&p)*&q, t*&vectorized::compose_permutations(&q,&p));
                 assert_eq!(t*&p, t*pmatrix);
+                assert_eq!((t*&p)*&q, t*&vectorized::compose_permutations(&q,&p));
             }
         }
     }
