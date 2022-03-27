@@ -757,7 +757,7 @@ fn set_by_edges(n:usize, set:&BitSet, trow:usize) -> (Edge,Edge) {
 #[inline(always)]
 /** New partition helper: construct permutations for partitioning rows based on an edge */
 fn edge2perms(mut e:Edge, offset: &mut usize) -> (Permutation,Permutation) {
-    /** PERF: can do this branch-free with PEXT/PDEP from BMI2 */
+    /* PERF: can do this branch-free with PEXT/PDEP from BMI2 */
     assert!(EBITS == 16);
     let mut perms = [PERMUTE_ZERO; 2*Edge::BITS as usize];
     while e != 0 {

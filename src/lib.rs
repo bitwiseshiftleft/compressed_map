@@ -36,7 +36,13 @@ pub mod uniform;
  * These functions also compress dictionaries `K -> u64`, where `K:Hash`.
  * They operate like uniform dictionaries, except that they can take advantage
  * of a skewed distribution in the values.  Asymptotically, this results in a
- * data structure within 11% of the Shannon entropy of the values.
+ * data structure within 11% of the Shannon entropy of the values.  However,
+ * they are slightly slower to build and query, especially if there are many
+ * different values.
+ *
+ * The primary use case of this map is compressing certificate revocation
+ * maps and similarly skewed structures.  In this example, it would map
+ * certificates to {valid, revoked} where 99% of them are valid.
  */
 pub mod nonuniform;
 

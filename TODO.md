@@ -1,9 +1,12 @@
 
 # Rust port
 
+* Make uniform maps return-type-flexible?
 * Nonuniform maps
+* Make sure nonuniform maps work with 0 items
 * Clean up code TODOs
 * Rename functions for clarity
+* Decide on assert! / debug_assert! / nothing
 * C / C++ interface
 * Demo app
 * File handling / serde
@@ -12,21 +15,22 @@
 ## Rust performance:
 
 The Rust version is slower than the C version except for large matrices.
-Internally, the matrix solvers are faster than C (due mainly to larger tiles)
-but rearranging rows is slower.
+Internally, the matrix solvers are faster than C for large matrices (due
+mainly to larger tiles) but rearranging rows is slower (but more cache-
+friendly).
 
 Hot spots in the profile:
 
 * interleave_rows (add BMI2 version?)
 * partition_rows  (can it be further improved?)
-* pseudoinverse: the current code is optimized for small rows.
+* pseudoinverse: the current code is optimized for small tiles.
 
 We could try the C strategy to reduce rearrangements?  I tried this in branch
-cstrat.  It's faster for small n, especially on M1.  However for large n, especially
-on Intel, it isn't.  Maybe it's harder on the CPU cache due to the larger
-number of random row writes?
+cstrat.  It's faster for small n, especially on M1.  However for large n, 
+especially on Intel, it isn't.  Maybe it's harder on the CPU cache due to
+the larger number of random row writes?
 
-Also Rust has no threading.
+Also the current Rust code has no threading.
     
 # For release
 

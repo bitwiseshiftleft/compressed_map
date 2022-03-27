@@ -219,7 +219,7 @@ pub fn blocks_required(rows:usize) -> usize {
  * Utility: either generate a fresh hash key, or derive one from an existing
  * key and index.
  */
-pub fn choose_key(base_key: Option<HasherKey>, n:usize) -> HasherKey {
+pub(crate) fn choose_key(base_key: Option<HasherKey>, n:usize) -> HasherKey {
     match base_key {
         None => {
             let mut key = [0u8; 16];
@@ -241,7 +241,7 @@ pub fn choose_key(base_key: Option<HasherKey>, n:usize) -> HasherKey {
 }
 
 /** Untyped core of a mapping object. */
-struct MapCore {
+pub(crate) struct MapCore {
     /** The number of bits stored per (key,value) pair. */
     pub bits_per_value: usize,
     nblocks: usize,
@@ -554,6 +554,48 @@ impl <T:Hash> Map<T> {
     }
 
     /**
+     * Build a uniform map from a vector as in `build`.
+     *
+     * Be careful: any duplicate `T` entries will cause the
+     * build to fail, possibly after a long time, even if they
+     * have the same value associated.
+     */
+    pub fn build_from_vec<'a>(map: &Vec<(&'a T,u64)>, options: &mut BuildOptions) -> Option<Self> {
+        /* Get the number of bits required */
+        let bits_per_value = match options.bits_per_value {
+            None => {
+                let mut range : Response = 0;
+                for v in map.into_iter().map(|(_k,v)| v) { range |= v; }
+                (Response::BITS - range.leading_zeros()) as usize
+            },
+            Some(bpv) => bpv as usize
+        };
+
+        for try_num in 0..options.max_tries {
+            let hkey = choose_key(options.key_gen, try_num);
+            let iter1 = map.into_iter();
+            let nblocks = blocks_required(iter1.len());
+            let mut iter = iter1.map(|(k,v)| {
+                let mut row = hash_object_to_row(&hkey,nblocks,k);
+                row.augmented ^= v;
+                row
+            });
+
+            /* Solve it! (with type-independent code) */
+            if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
+                options.try_num = try_num;
+                return Some(Self {
+                    hash_key: hkey,
+                    core: solution,
+                    _phantom: PhantomData::default()
+                });
+            }
+        }
+
+        None // Fail!
+    }
+
+    /**
      * Query an item in the map.
      * If (key,v) was included when building the map, then v will be returned.
      * Otherwise, an arbitrary value will be returned.
@@ -576,8 +618,8 @@ impl <T:Hash> ApproxSet<T> {
      * not included in the original list, the return value will be arbitrary.
      *
      * You can pass a `HashSet<T>`, `BTreeSet<T>` etc.  If you pass a non-set
-     * type such as `Vec<T>` then be careful: any duplicate `T` entries will
-     * cause the build to fail, possibly after a long time.
+     * type then be careful: any duplicate `T` entries will cause the build
+     * to fail, possibly after a long time.
      */
     pub fn build<'a, Collection>(set: &'a Collection, options: &mut BuildOptions) -> Option<Self>
     where for<'b> &'b Collection: IntoIterator<Item=&'b T>,

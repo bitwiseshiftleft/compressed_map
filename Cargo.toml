@@ -21,9 +21,6 @@ harness = false
 name = "uniform"
 harness = false
 
-[build]
-debug = 1
-
 [profile.release]
 lto = true
 #panic = "abort"
