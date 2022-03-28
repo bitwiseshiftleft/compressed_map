@@ -6,15 +6,21 @@
  * Nonuniform sparse linear map implementation.
  */
 
-use crate::uniform::{MapCore,Map,Response,BuildOptions};
+use crate::uniform::{MapCore,Map,LfrBlock,self};
 use crate::tilematrix::bitset::{BitSet,BitSetIterator};
 use std::collections::HashMap;
 use core::marker::PhantomData;
 use std::hash::Hash;
 use std::cmp::{min,Ord,Ordering};
+pub type BuildOptions = uniform::BuildOptions;
 
 type Locator = u32;
 type Plan = Locator;
+
+/** Return the high bit of a locator.  Panics if 0. */
+fn high_bit(x:Locator) -> u32 {
+    Locator::BITS - 1 - x.leading_zeros()
+}
 
 /**
  * Sorted map: (lower bound, response).
@@ -26,9 +32,7 @@ type ResponseMap<V> = Vec<(Locator,V)>;
 
 /** Next power of 2 that's less than x; minimum 1 */
 fn floor_power_of_2(x:Locator) -> Locator {
-    if x==0 { 1 } else {
-        1<<(Locator::BITS - 1 - x.leading_zeros())
-    }
+    if x==0 { 1 } else { 1<<high_bit(x) }
 }
 
 /**
@@ -63,14 +67,14 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
     for v in counts.values() { total += v; }
     debug_assert!(total > 0);
 
-    let mut total_width = 0;
+    let mut total_width = 0 as Locator;
     let mut items = Vec::new();
     for (k,v) in counts.iter() {
         let count = *v as u128;
         let ratio = ((count << Locator::BITS) as u128) / (total as u128);
         let width = floor_power_of_2(ratio as Locator);
         items.push((k,width,*v));
-        total_width += width;
+        total_width = total_width.wrapping_add(width);
     }
 
     /* Sort them into priority order by "fit" */
@@ -93,8 +97,8 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
         items[i].1 += expand;
     }
 
-    /* Sort by decreasing alignment, decreasing interval size, and then key */
-    items.sort_by_key(|(k,w,_c)| (-(w.trailing_zeros() as i32),!w,*k));
+    /* Sort by hamming weight, decreasing alignment, and then key */
+    items.sort_by_key(|(k,w,_c)| (w.count_ones(), -(w.trailing_zeros() as i32),*k));
     let mut total = 0;
     let mut plan = 0;
     let mut count = 0;
@@ -103,10 +107,12 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
         value_map.insert(*k,count);
         interval_vec.push((c,total,total+(w-1)));
         count += 1;
-        total += w;
-        plan |= w;
-        if (w & (w-1)) != 0 {
-            plan |= (2 as Locator).wrapping_shl(Locator::BITS-1-w.leading_zeros());
+        total = total.wrapping_add(w);
+        if (w & (w-1)) == 0 {
+            plan |= w;
+        } else {
+            /* Set the high bit */
+            plan |= (1 as Locator).wrapping_shl(Locator::BITS-1-w.leading_zeros());
         }
     }
 
@@ -138,8 +144,9 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
      * `T` entries will cause the build to fail, possibly after a long time,
      * even if they have the same value associated.
      *
+     * Ignores the BuildOptions' shift and bits_per_value.
      */
-    pub fn build<'a, Collection>(map: &'a Collection, options: &BuildOptions) -> Option<NonUniformMap<K,V>>
+    pub fn build<'a, Collection>(map: &'a Collection, options: &mut BuildOptions) -> Option<NonUniformMap<K,V>>
     where for<'b> &'b Collection: IntoIterator<Item=(&'b K, &'b V)>,
           <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator
     {
@@ -149,6 +156,20 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
             let counter = counts.entry(v).or_insert(0);
             *counter += 1;
         }
+
+        if counts.len() == 0 {
+            return None;
+        } else if counts.len() == 1 {
+            let v = counts.keys().next().unwrap();
+            return Some(NonUniformMap {
+                plan: 0,
+                response_map: vec![(0,(*v).clone())],
+                salt: vec![],
+                core: vec![],
+                _phantom: PhantomData::default()
+            });
+        }
+
         let (plan, value_map, interval_vec, response_map) = formulate_plan(counts);
         let nphases = plan.count_ones() as usize;
 
@@ -156,7 +177,7 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
         let mut phase_bits = Vec::with_capacity(nphases);
         let mut plan_tmp = plan;
         while plan_tmp != 0 {
-            let plan_tmp_2 = plan_tmp & !(plan_tmp-1);
+            let plan_tmp_2 = plan_tmp & (plan_tmp-1);
             let before_plan  = (plan_tmp-1) & !plan_tmp;
             let before_plan2 = plan_tmp_2.wrapping_sub(1) & !plan_tmp_2;
             phase_bits.push(before_plan2 & !before_plan);
@@ -166,8 +187,12 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
         /* Which items must be put into which phases?
          * How many items are there in that phase?
          * Which is the index of non-power-of-2 item, if any?
+         * (the "odd man out", or OMO)
          */
+        let mut lo_omo = 0;
         let mut odd_man_out = usize::MAX;
+        let mut phase_omo   = usize::MAX;
+        let mut min_phase_affecting_omo = usize::MAX;
         let mut n_omo = 0;
         let mut phase_to_resolve = Vec::with_capacity(interval_vec.len());
         let mut phase_item_counts = vec![0;nphases];
@@ -177,42 +202,53 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
             if width & width.wrapping_sub(1) != 0 {
                 odd_man_out = i;
                 n_omo = c;
+                lo_omo = lo;
                 phase_to_resolve.push(u8::MAX);
+                for phase in 0..nphases {
+                    if phase_bits[phase] & width != 0 {
+                        phase_omo = phase;
+                        min_phase_affecting_omo = min(min_phase_affecting_omo,phase);
+                    }
+                }
             } else {
                 for phase in 0..nphases {
-                    if phase_bits[i] == lo^hi {
+                    if phase_bits[phase] & width != 0 {
                         phase_to_resolve.push(phase as u8);
                         phase_item_counts[phase] += c;
                         break;
                     }
                 }
             }
-            assert!(phase_to_resolve.len() == i+1);
+            debug_assert!(phase_to_resolve.len() == i+1);
         }
 
         let mut phase_offsets = Vec::with_capacity(nphases);
         let mut total = n_omo;
-        for i in 0..nphases {
-            phase_offsets[i] = total;
-            total += phase_item_counts[i];
+        for phase in 0..nphases {
+            phase_offsets.push(total);
+            total += phase_item_counts[phase];
         }
     
         /* Sort by phase */
-        let no_key = unimplemented!("TODO");
-        let mut values_by_phase = vec![(no_key,0 as Locator); total];
+        let mut values_by_phase = Vec::new();
         let mut phase_offsets_cur = phase_offsets.clone();
         let mut current_values = vec![0 as Locator; n_omo];
         let mut omo_offset = 0;
         map.into_iter().for_each(|(k,v)| {
+            if values_by_phase.len() == 0 {
+                /* Need to initialize the vector with something;
+                 * choose k arbitrarily.
+                 */
+                values_by_phase = vec![(k,0 as Locator); total];
+            }
             let vi = value_map[v];
-            let (_c,lo,_hi) = interval_vec[vi];
+            let (_c,_lo,hi) = interval_vec[vi];
             if vi == odd_man_out {
-                values_by_phase[omo_offset] = (k,lo);
+                values_by_phase[omo_offset] = (k,hi);
                 omo_offset += 1;
-                let _ign = k;
             } else {
                 let ph = phase_to_resolve[vi] as usize;
-                values_by_phase[phase_offsets_cur[ph]] = (k,lo);
+                values_by_phase[phase_offsets_cur[ph]] = (k,hi);
                 phase_offsets_cur[ph] += 1;
             }
         });
@@ -223,36 +259,131 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
             filter: BitSet::with_capacity(total)
         };
         let mut salt = vec![0u8];
-        let mut core = Vec::new();
-        let mut tries = options.max_tries;
+        let mut core : Vec<MapCore> = Vec::new();
+        let mut tries = options.try_num;
 
         /* Phase by phase */
-        while tries > 0 && salt.len() <= nphases {
+        while tries < options.max_tries && salt.len() <= nphases {
             let phase = salt.len()-1;
-            let phase_shift = phase_bits[phase].trailing_zeros();
-            let mut phase_options = BuildOptions::default(); /* TODO */
+            let bits_this_phase = phase_bits[phase];
+            let phase_shift = bits_this_phase.trailing_zeros();
+            let phase_nbits = bits_this_phase.count_ones();
+            let parent_key  = if phase == 0 { options.key_gen } else { Some(core[phase-1].hash_key) };
+            let mut phase_options = BuildOptions {
+                max_tries: min(salt[phase] as usize + options.max_tries - tries,255),
+                try_num: salt[phase] as usize,
+                key_gen: parent_key,
+                bits_per_value: Some(phase_nbits as u8),
+                shift: phase_shift as u8
+            };
 
-            unimplemented!("TODO: Filter by phase");
+            /* Set the values we care about */
+            phase_care.filter.clear();
+            phase_care.filter.union_with_range(omo_offset..phase_offsets_cur[phase]);
+            if phase == phase_omo {
+                /* Insert the ones that aren't above the beginning of the interval */
+                for i in 0..omo_offset {
+                    if current_values[i] < lo_omo {
+                        phase_care.filter.insert(i);
+                    }
+                }
+            } else if phase > phase_omo {
+                phase_care.filter.union_with_range(0..omo_offset);
+            }
 
             if let Some(phase_map) = Map::<K,Locator>::build::<FilteredVec<K>>(&phase_care, &mut phase_options) {
+                tries += phase_options.try_num - salt[phase] as usize;
+                salt[phase] = phase_options.try_num as u8;
                 salt.push(0);
+                if phase >= min_phase_affecting_omo && phase < phase_omo {
+                    for i in 0..omo_offset {
+                        let (k,_) = phase_care.vec[i];
+                        current_values[i] = (current_values[i] & !bits_this_phase)
+                            | (phase_map.try_query(k).unwrap() << phase_shift);
+                    }
+                }
                 core.push(phase_map.core);
-                /* ... if we even care about OMO this phase ... */
-                unimplemented!("TODO: update current_values");
             } else {
                 salt[phase] = salt[phase].checked_add(1)?;
                 tries -= 1;
             }
         }
 
-        /* All done! */
-        Some(NonUniformMap {
-            plan: plan,
-            response_map: response_map,
-            salt: salt[1..nphases].to_vec(),
-            core: core,
-            _phantom: PhantomData::default()
-        })
+        options.try_num = tries;
+        if tries >= options.max_tries {
+            None // Fail!
+        } else {
+                Some(NonUniformMap {
+                plan: plan,
+                response_map: response_map,
+                salt: salt[1..nphases].to_vec(),
+                core: core,
+                _phantom: PhantomData::default()
+            })
+        }
+    }
+
+    fn bsearch<'a>(&'a self, low: Locator, high: Locator) -> Option<&'a V> {
+        let plow  = self.response_map.partition_point(|(begin,_v)| *begin <= low) - 1;
+        if (plow == self.response_map.len() - 1)
+            || (self.response_map[plow+1].0 > high) {
+            Some(&self.response_map[plow].1)
+        } else {
+            None
+        }
+    }
+
+    pub fn query<'a>(&'a self, key:&K) -> &'a V {
+        let nphases = self.core.len();
+        let mut locator = 0 as Locator;
+        let mut plan = self.plan;
+        if plan == 0 { return &self.response_map[0].1; }
+        let mut known_mask = (plan-1) & !plan;
+
+        /* The upper bits are the most informative.  However, in most cases the second-highest
+        * map has more bits than the highest one, so it's actually fastest to start there.
+        */
+        if nphases >= 2 {
+            let h1 = high_bit(plan);
+            plan ^= 1<<h1;
+            let h2 = high_bit(plan);
+            let thisphase = self.core[nphases-2].query_hash(key) as Locator;
+            known_mask |= (1<<h1) - (1<<h2);
+            locator |= thisphase << h2;
+            if let Some(result) = self.bsearch(locator, locator|!known_mask) {
+                return result;
+            }
+        }
+
+        plan = self.plan;
+        let mut phase = nphases - 1;
+        loop {
+            let h = high_bit(plan);
+            plan ^= 1<<h;
+
+            if phase+2 != nphases {
+                let thisphase = self.core[phase].query_hash(key) as Locator;
+                locator |= thisphase << h;
+                known_mask |= ((1 as Locator)<<h).wrapping_neg();
+                if let Some(result) = self.bsearch(locator, locator|!known_mask) {
+                    return result;
+                }
+            }
+
+            if phase == 0 { break; }
+            phase -= 1;
+        };
+        
+        unreachable!("Map must have been constructed wrong; we should have a response by now")
+    }
+
+    /** Return the size of core storage, in bytes */
+    pub fn core_size(&self) -> usize {
+        let mut ret = 0;
+        for ph in &self.core {
+            ret += ph.blocks.len();
+        }
+        (ret * LfrBlock::BITS as usize) / 8
     }
 }
 
@@ -284,5 +415,41 @@ impl <'a,'b,T> IntoIterator for &'a FilteredVec<'b,T> {
     type IntoIter = FilteredVecIterator<'a,T>;
     fn into_iter(self) -> FilteredVecIterator<'a,T> {
         FilteredVecIterator { vec: &self.vec, bsi: self.filter.into_iter() }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use rand::{thread_rng,Rng};
+    use crate::nonuniform::{NonUniformMap,BuildOptions};
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_nonuniform_map() {
+        assert!(NonUniformMap::build(&HashMap::<u32,u32>::new(), &mut BuildOptions::default()).is_none());
+        for i in 0u32..100 {
+            let mut map = HashMap::new();
+            let mut rng = thread_rng();
+            let n_items = i/10+1;
+            let pr_splits : Vec<f64> = (0..n_items).map(|_| rng.gen_range(0.0..1.0)).collect();
+
+            let nitems = 1000;
+            for _ in 0..nitems {
+                let mut v = n_items-1;
+                for (i,p) in (&pr_splits).into_iter().enumerate() {
+                    if rng.gen_range(0.0..1.0) < *p {
+                        v = i as u32;
+                        break;
+                    }
+                }
+                map.insert(rng.gen::<u32>(), v);
+            }
+            let compressed_map = NonUniformMap::build(&map, &mut BuildOptions::default()).unwrap();
+
+            for (k,v) in map {
+                assert_eq!(compressed_map.query(&k), &v);
+            }
+        }
     }
 }

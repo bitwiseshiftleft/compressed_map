@@ -41,18 +41,18 @@ fn criterion_benchmark(crit: &mut Criterion) {
                 total_tries += options.try_num + 1;
                 total_builds += 1;
             }));
-        println!("Building for size {} success rate {}%", size,
-            total_builds as f64 * 100. / total_tries as f64);
 
-        let umap = umap.unwrap();
-
-        /* Bench querying */
-        let mut qi = 0;
-        crit.bench_function(&format!("uniform query {}",size),
-            |crit| crit.iter(|| {
-                assert_eq!(umap.query(&keys[qi]), values[qi]);
-                qi = (qi+1) % keys.len();
-            }));
+        if let Some(umap_some) = umap {
+            println!("Building for size {} success rate {}%", size,
+                total_builds as f64 * 100. / total_tries as f64);
+            /* Bench querying */
+            let mut qi = 0;
+            crit.bench_function(&format!("uniform query {}",size),
+                |crit| crit.iter(|| {
+                    assert_eq!(umap_some.query(&keys[qi]), values[qi]);
+                    qi = (qi+1) % keys.len();
+                }));
+        }
     }
 }
 
@@ -89,18 +89,18 @@ fn criterion_benchmark_slow(crit: &mut Criterion) {
                 total_tries += options.try_num + 1;
                 total_builds += 1;
             }));
-        println!("Building for size {} success rate {}%", size,
-            total_builds as f64 * 100. / total_tries as f64);
 
-        let umap = umap.unwrap();
-
-        /* Bench querying */
-        let mut qi = 0;
-        crit.bench_function(&format!("uniform query {}",size),
-            |crit| crit.iter(|| {
-                assert_eq!(umap.query(&keys[qi]), values[qi]);
-                qi = (qi+1) % keys.len();
-            }));
+        if let Some(umap_some) = umap {
+            println!("Building for size {} success rate {}%", size,
+                total_builds as f64 * 100. / total_tries as f64);
+            /* Bench querying */
+            let mut qi = 0;
+            crit.bench_function(&format!("uniform query {}",size),
+                |crit| crit.iter(|| {
+                    assert_eq!(umap_some.query(&keys[qi]), values[qi]);
+                    qi = (qi+1) % keys.len();
+                }));
+        }
     }
 }
 

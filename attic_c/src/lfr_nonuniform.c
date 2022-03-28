@@ -538,7 +538,7 @@ lfr_response_t API_VIS lfr_nonuniform_query (
         lfr_locator_t thisphase = lfr_uniform_query(map->phases[map->nphases-2], key, keybytes);
 
         known_mask |= ((lfr_locator_t)1<<h1) - ((lfr_locator_t)1<<h2);
-        loc |= thisphase <<= h2;
+        loc |= thisphase << h2;
 
         lfr_response_t lower = bsearch_bound(map->nresponses,map->response_map,loc);
         lfr_response_t upper = bsearch_bound(map->nresponses,map->response_map,loc |~ known_mask);
@@ -553,7 +553,7 @@ lfr_response_t API_VIS lfr_nonuniform_query (
 
         lfr_locator_t thisphase = lfr_uniform_query(map->phases[phase], key, keybytes);
 
-        loc |= thisphase <<= h;
+        loc |= thisphase << h;
         known_mask |= -((lfr_locator_t)1<<h);
         
         lfr_response_t lower = bsearch_bound(map->nresponses,map->response_map,loc);

@@ -26,7 +26,7 @@ pub type HasherKey = [u8; 16];
 
 type RowIdx   = u64; // if u32 then limit to ~4b rows
 type BlockIdx = u32;
-type LfrBlock = u32;
+pub(crate) type LfrBlock = u32;
 
 /** The internal block size of the map, in bytes. */
 pub const BLOCKSIZE : usize = (LfrBlock::BITS as usize) / 8;
@@ -242,10 +242,16 @@ pub(crate) fn choose_key(base_key: Option<HasherKey>, n:usize) -> HasherKey {
 
 /** Untyped core of a mapping object. */
 pub(crate) struct MapCore {
+    /** The SipHash key used to hash inputs. */
+    pub(crate) hash_key: HasherKey,
+
     /** The number of bits stored per (key,value) pair. */
     pub bits_per_value: usize,
-    nblocks: usize,
-    blocks: Vec<LfrBlock>,
+
+    /** The number of blocks per bit */
+    pub nblocks: usize,
+
+    pub(crate) blocks: Vec<LfrBlock>,
 }
 
 impl MapCore {
@@ -315,8 +321,9 @@ impl MapCore {
 
         Some(MapCore{
             bits_per_value: naug,
+            blocks: core,
             nblocks: nblocks,
-            blocks: core
+            hash_key: *hash_key
         })
     }
 
@@ -381,6 +388,11 @@ impl MapCore {
         }
         ret
     }
+
+    /** Query this map at the hash of a given key */
+    pub(crate) fn query_hash<K:Hash>(&self, key: &K) -> Response {
+        self.query(hash_object_to_row(&self.hash_key, self.nblocks, key))
+    }
 }
 
 /**
@@ -392,11 +404,8 @@ impl MapCore {
  * will be returned.  Otherwise, an arbitrary value will be returned.
  */
 pub struct Map<K,V> {
-    /** The SipHash key used to hash inputs. */
-    hash_key: HasherKey,
-
     /** Untyped map object, consulted after hashing. */
-    core: MapCore,
+    pub(crate) core: MapCore,
 
     /** Phantom to hold the types of K,V */
     _phantom: PhantomData<(K,V)>
@@ -415,9 +424,6 @@ pub struct Map<K,V> {
  * you will usually get `false`, but not always.
  */
 pub struct ApproxSet<K> {
-    /** The SipHash key used to hash inputs. */
-    hash_key: HasherKey,
-
     /** Untyped map object, consulted after hashing. */
     core: MapCore,
 
@@ -431,7 +437,7 @@ pub struct ApproxSet<K> {
  * Implements `Default`, so you can get reasonable options
  * with BuildOptions::default().
  */
-#[derive(PartialEq,Eq,Debug,Ord,PartialOrd)]
+#[derive(Copy,Clone,PartialEq,Eq,Debug,Ord,PartialOrd)]
 pub struct BuildOptions{
     /**
      * The operation to build a map or approximate set
@@ -452,8 +458,8 @@ pub struct BuildOptions{
     pub max_tries : usize,
 
     /**
-     * Out-parameter from build: on which try did the build
-     * succeed?
+     * In-out-parameter from build: on which try did the build
+     * succeed?  If passed in as nonzero, the counter starts here.
      */
     pub try_num: usize,
 
@@ -482,6 +488,12 @@ pub struct BuildOptions{
      * Default: `None`.
      */
     pub bits_per_value : Option<u8>,
+
+    /**
+     * Values will be shifted right by this many bits before
+     * encoding.  Used by nonuniform.
+     */
+    pub shift: u8
 }
 
 impl Default for BuildOptions {
@@ -490,7 +502,8 @@ impl Default for BuildOptions {
             key_gen : None,
             max_tries : 256,
             bits_per_value : None,
-            try_num: 0
+            try_num: 0,
+            shift: 0
         }
     }
 }
@@ -530,13 +543,13 @@ where Response:From<V> {
             Some(bpv) => bpv as usize
         };
 
-        for try_num in 0..options.max_tries {
+        for try_num in options.try_num..options.max_tries {
             let hkey = choose_key(options.key_gen, try_num);
             let iter1 = map.into_iter();
             let nblocks = blocks_required(iter1.len());
             let mut iter = iter1.map(|(k,v)| {
                 let mut row = hash_object_to_row(&hkey,nblocks,k);
-                row.augmented ^= Response::from(*v);
+                row.augmented ^= Response::from(*v) >> options.shift;
                 row
             });
 
@@ -544,7 +557,6 @@ where Response:From<V> {
             if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
                 options.try_num = try_num;
                 return Some(Self {
-                    hash_key: hkey,
                     core: solution,
                     _phantom: PhantomData::default()
                 });
@@ -561,7 +573,7 @@ where Response:From<V> {
      */
     pub fn query(&self, key: &K) -> V 
     where V:From<Response> {
-        self.core.query(hash_object_to_row(&self.hash_key, self.core.nblocks, key)).into()
+        self.core.query_hash(key).into()
     }
 
     /**
@@ -571,7 +583,7 @@ where Response:From<V> {
      */
     pub fn try_query(&self, key: &K) -> Option<V> 
     where V:TryFrom<Response> {
-        self.core.query(hash_object_to_row(&self.hash_key, self.core.nblocks, key)).try_into().ok()
+        self.core.query_hash(key).try_into().ok()
     }
 }
 
@@ -601,7 +613,7 @@ impl <K:Hash> ApproxSet<K> {
             Some(bpv) => bpv as usize
         };
 
-        for try_num in 0..options.max_tries {
+        for try_num in options.try_num..options.max_tries {
             let hkey = choose_key(options.key_gen, try_num);
             let iter1 = set.into_iter();
             let nblocks = blocks_required(iter1.len());
@@ -611,7 +623,6 @@ impl <K:Hash> ApproxSet<K> {
             if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
                 options.try_num = try_num;
                 return Some(Self {
-                    hash_key: hkey,
                     core: solution,
                     _phantom: PhantomData::default()
                 });
@@ -630,7 +641,7 @@ impl <K:Hash> ApproxSet<K> {
      * and thus false positives, are deterministic after the set has been constructed.
      */
     pub fn probably_contains(&self, key: &K) -> bool {
-        self.core.query(hash_object_to_row(&self.hash_key, self.core.nblocks, key)) == 0
+        self.core.query_hash(key) == 0
     }
 }
 

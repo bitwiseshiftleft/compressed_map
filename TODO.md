@@ -1,12 +1,9 @@
 
 # Rust port
 
-* Rename T to K
-* Make uniform maps return-type-flexible?
-* Nonuniform maps
-* Make sure nonuniform maps work with 0 items
 * Clean up code TODOs
 * Rename functions for clarity
+* Rename Map and NonUniformMap to CompressedMap etc.
 * Decide on assert! / debug_assert! / nothing
 * C / C++ interface
 * Demo app

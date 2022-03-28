@@ -19,6 +19,9 @@ impl BitSet {
         BitSet { set : vec![0; (capacity+63)/64] }
     }
 
+    /** Remove all elements from self, but don't resize */
+    pub fn clear(&mut self) { self.set.fill(0); }
+
     /** Clear and free self */
     #[allow(dead_code)]
     pub fn free(&mut self) {
@@ -58,8 +61,10 @@ impl BitSet {
     }
 
     /** Create a set from a given range */
-    pub fn from_range(capacity:usize, range:Range<usize>) -> Self {
-        let mut ret = BitSet { set : vec![0; (capacity+63)/64] };
+    pub fn union_with_range(&mut self, range:Range<usize>) {
+        if self.set.len() < (range.end+63)/64 {
+            self.set.resize((range.end+63)/64, 0);
+        }
         for i in range.start/64 .. (range.end + 63) / 64 {
             let mut mask = !0;
             if i*64 < range.start {
@@ -68,8 +73,14 @@ impl BitSet {
             if (i+1)*64 > range.end {
                 mask &= (1u64 << (range.end-i*64)) - 1;
             }
-            ret.set[i] = mask;
+            self.set[i] |= mask;
         }
+    }
+
+    /** Create a set from a given range */
+    pub fn from_range(capacity:usize, range:Range<usize>) -> Self {
+        let mut ret = BitSet { set : vec![0; (capacity+63)/64] };
+        ret.union_with_range(range);
         ret
     }
 

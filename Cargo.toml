@@ -21,6 +21,10 @@ harness = false
 name = "uniform"
 harness = false
 
+[[bench]]
+name = "nonuniform"
+harness = false
+
 [profile.release]
 lto = true
 #panic = "abort"
