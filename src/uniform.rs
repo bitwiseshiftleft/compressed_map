@@ -64,11 +64,11 @@ fn sample_block_positions(
     let k = 63-nblocks.leading_zeros() as u64;
     let smoothlog = (k<<48) + (nblocks<<(48-k)) - (1<<48);
     let leading_coefficient = (12u64<<8) / BLOCKSIZE as u64; // experimentally determined
-    let num = smoothlog * leading_coefficient; // With BLOCKSIZE=4, can't overflow until k=85 which is impossible
+    let num = smoothlog * leading_coefficient; // With BLOCKSIZE=4, can'K overflow until k=85 which is impossible
 
-    stride_seed |= (1u64<<33) / OVERPROVISION; // | instead of + because it can't overflow
-    let den = (((stride_seed * stride_seed) as u128 * nblocks_huge) >> 32) as u64; // can't overflow because stride_seed is only 32 bits
-    let b_seed = (num / den + a_seed) & 0xFFFFFFFF; // den can't be 0 because stride_seed is adjusted
+    stride_seed |= (1u64<<33) / OVERPROVISION; // | instead of + because it can'K overflow
+    let den = (((stride_seed * stride_seed) as u128 * nblocks_huge) >> 32) as u64; // can'K overflow because stride_seed is only 32 bits
+    let b_seed = (num / den + a_seed) & 0xFFFFFFFF; // den can'K be 0 because stride_seed is adjusted
 
     let     a = ((a_seed as u128 * nblocks_huge)>>32) as BlockIdx;
     let mut b = ((b_seed as u128 * nblocks_huge)>>32) as BlockIdx;
@@ -92,10 +92,10 @@ fn interpret_hash_as_row(hash: Hash128, nblocks:usize) -> LfrRow {
 }
 
 /** The outer-main hash function: hash an object to a LfrRow */
-fn hash_object_to_row<T:Hash> (key: &HasherKey, nblocks:usize, t: &T)-> LfrRow {
+fn hash_object_to_row<K:Hash> (key: &HasherKey, nblocks:usize, k: &K)-> LfrRow {
     let mut h = LfrHasher::new_with_key(&key);
     WhyHashing::HashingInput.hash(&mut h);
-    t.hash(&mut h);
+    k.hash(&mut h);
     interpret_hash_as_row(h.finish128(), nblocks)
 }
 
@@ -124,7 +124,7 @@ impl BlockGroup {
  * project them out of the remaining ones.  Clears the contents of left and right,
  * but not the solution.
  *
- * Fails if the block group doesn't have full row-rank.
+ * Fails if the block group doesn'K have full row-rank.
  */
 fn forward_solve(left:&mut BlockGroup, right:&mut BlockGroup) -> Option<BlockGroup> {
     if right.empty {
@@ -138,7 +138,7 @@ fn forward_solve(left:&mut BlockGroup, right:&mut BlockGroup) -> Option<BlockGro
     let mut right_to_merge = BitSet::with_capacity(right.contents.rows);
     let mut interleave_left = BitSet::with_capacity(left.contents.rows+right.contents.rows);
     let mut row_ids = Vec::new();
-    row_ids.reserve(left.contents.rows + right.contents.rows); // over-reserve but this isn't the long pole
+    row_ids.reserve(left.contents.rows + right.contents.rows); // over-reserve but this isn'K the long pole
     let (mut l, mut r, mut i) = (0,0,0);
 
     /* There should always be something in the left and right group,
@@ -384,22 +384,22 @@ impl MapCore {
 }
 
 /**
- * Compressed static function of type `T -> u64`.
+ * Compressed static function of type `K -> u64`.
  *
  * These objects can be constructed from a mapping type or vector of
- * pairs.  They can then be queried with a given `T`; if that `T` was
+ * pairs.  They can then be queried with a given `K`; if that `K` was
  * included in the map during construction, then the corresponding value
  * will be returned.  Otherwise, an arbitrary value will be returned.
  */
-pub struct Map<T> {
+pub struct Map<K,V> {
     /** The SipHash key used to hash inputs. */
     hash_key: HasherKey,
 
     /** Untyped map object, consulted after hashing. */
     core: MapCore,
 
-    /** Phantom to hold the type of T */
-    _phantom: PhantomData<T>
+    /** Phantom to hold the types of K,V */
+    _phantom: PhantomData<(K,V)>
 }
 
 /**
@@ -414,15 +414,15 @@ pub struct Map<T> {
  * set, you will always get `true`.  If you query an ojbect not in the set,
  * you will usually get `false`, but not always.
  */
-pub struct ApproxSet<T> {
+pub struct ApproxSet<K> {
     /** The SipHash key used to hash inputs. */
     hash_key: HasherKey,
 
     /** Untyped map object, consulted after hashing. */
     core: MapCore,
 
-    /** Phantom to hold the type of T */
-    _phantom: PhantomData<T>,
+    /** Phantom to hold the type of K */
+    _phantom: PhantomData<K>,
 }
 
 /**
@@ -501,7 +501,8 @@ fn next_power_of_2_ge(x:usize) -> usize {
     1 << (usize::BITS - (x-1).leading_zeros())
 }
 
-impl <T:Hash> Map<T> {
+impl <K:Hash,V:Copy> Map<K,V>
+where Response:From<V> {
     /**
      * Build a uniform map.
      *
@@ -510,20 +511,20 @@ impl <T:Hash> Map<T> {
      * mapping, `query` will return the corresponding `v`.  If you query any `k`
      * not included in the original list, the return value will be arbitrary.
      *
-     * You can pass a `HashMap<T,u64>`, `BTreeMap<T,u64>` etc.  If you pass a
-     * non-mapping type such as `Vec<(T,u64)>` then be careful: any duplicate
-     * `T` entries will cause the build to fail, possibly after a long time,
+     * You can pass a `HashMap<K,V>`, `BTreeMap<K,V>` etc.  If you pass a
+     * non-mapping type such as `Vec<(K,V)>` then be careful: any duplicate
+     * `K` entries will cause the build to fail, possibly after a long time,
      * even if they have the same u64 associated.
      */
     pub fn build<'a, Collection>(map: &'a Collection, options: &mut BuildOptions) -> Option<Self>
-    where for<'b> &'b Collection: IntoIterator<Item=(&'b T, &'b Response)>,
-          <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator
+    where for<'b> &'b Collection: IntoIterator<Item=(&'b K, &'b V)>,
+          <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator,
     {
         /* Get the number of bits required */
         let bits_per_value = match options.bits_per_value {
             None => {
                 let mut range : Response = 0;
-                for v in map.into_iter().map(|(_k,v)| v) { range |= v; }
+                for v in map.into_iter().map(|(_k,v)| v) { range |= Response::from(*v); }
                 (Response::BITS - range.leading_zeros()) as usize
             },
             Some(bpv) => bpv as usize
@@ -535,49 +536,7 @@ impl <T:Hash> Map<T> {
             let nblocks = blocks_required(iter1.len());
             let mut iter = iter1.map(|(k,v)| {
                 let mut row = hash_object_to_row(&hkey,nblocks,k);
-                row.augmented ^= v;
-                row
-            });
-
-            /* Solve it! (with type-independent code) */
-            if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
-                options.try_num = try_num;
-                return Some(Self {
-                    hash_key: hkey,
-                    core: solution,
-                    _phantom: PhantomData::default()
-                });
-            }
-        }
-
-        None // Fail!
-    }
-
-    /**
-     * Build a uniform map from a vector as in `build`.
-     *
-     * Be careful: any duplicate `T` entries will cause the
-     * build to fail, possibly after a long time, even if they
-     * have the same value associated.
-     */
-    pub fn build_from_vec<'a>(map: &Vec<(&'a T,u64)>, options: &mut BuildOptions) -> Option<Self> {
-        /* Get the number of bits required */
-        let bits_per_value = match options.bits_per_value {
-            None => {
-                let mut range : Response = 0;
-                for v in map.into_iter().map(|(_k,v)| v) { range |= v; }
-                (Response::BITS - range.leading_zeros()) as usize
-            },
-            Some(bpv) => bpv as usize
-        };
-
-        for try_num in 0..options.max_tries {
-            let hkey = choose_key(options.key_gen, try_num);
-            let iter1 = map.into_iter();
-            let nblocks = blocks_required(iter1.len());
-            let mut iter = iter1.map(|(k,v)| {
-                let mut row = hash_object_to_row(&hkey,nblocks,k);
-                row.augmented ^= v;
+                row.augmented ^= Response::from(*v);
                 row
             });
 
@@ -600,12 +559,23 @@ impl <T:Hash> Map<T> {
      * If (key,v) was included when building the map, then v will be returned.
      * Otherwise, an arbitrary value will be returned.
      */
-    pub fn query(&self, key: &T) -> u64 {
-        self.core.query(hash_object_to_row(&self.hash_key, self.core.nblocks, key))
+    pub fn query(&self, key: &K) -> V 
+    where V:From<Response> {
+        self.core.query(hash_object_to_row(&self.hash_key, self.core.nblocks, key)).into()
+    }
+
+    /**
+     * Query an item in the map.
+     * If (key,v) was included when building the map, then v will be returned.
+     * Otherwise, an arbitrary value will be returned.
+     */
+    pub fn try_query(&self, key: &K) -> Option<V> 
+    where V:TryFrom<Response> {
+        self.core.query(hash_object_to_row(&self.hash_key, self.core.nblocks, key)).try_into().ok()
     }
 }
 
-impl <T:Hash> ApproxSet<T> {
+impl <K:Hash> ApproxSet<K> {
     /** Default bits per value if none is specified. */
     const DEFAULT_BITS_PER_VALUE : usize = 8;
 
@@ -617,12 +587,12 @@ impl <T:Hash> ApproxSet<T> {
      * mapping, `query` will return the corresponding `v`.  If you query any `k`
      * not included in the original list, the return value will be arbitrary.
      *
-     * You can pass a `HashSet<T>`, `BTreeSet<T>` etc.  If you pass a non-set
-     * type then be careful: any duplicate `T` entries will cause the build
+     * You can pass a `HashSet<K>`, `BTreeSet<K>` etc.  If you pass a non-set
+     * type then be careful: any duplicate `K` entries will cause the build
      * to fail, possibly after a long time.
      */
     pub fn build<'a, Collection>(set: &'a Collection, options: &mut BuildOptions) -> Option<Self>
-    where for<'b> &'b Collection: IntoIterator<Item=&'b T>,
+    where for<'b> &'b Collection: IntoIterator<Item=&'b K>,
           <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator
     {
         /* Choose the number of bits required */
@@ -659,7 +629,7 @@ impl <T:Hash> ApproxSet<T> {
      * a small false positive rate depending on set construction parameters.  Queries,
      * and thus false positives, are deterministic after the set has been constructed.
      */
-    pub fn probably_contains(&self, key: &T) -> bool {
+    pub fn probably_contains(&self, key: &K) -> bool {
         self.core.query(hash_object_to_row(&self.hash_key, self.core.nblocks, key)) == 0
     }
 }
@@ -677,11 +647,11 @@ mod tests {
         let mut map = HashMap::new();
         for i in 0..10 {
             for _j in 0..99*i {
-                map.insert(rng.gen::<u64>(), rng.gen::<u64>());
+                map.insert(rng.gen::<u64>(), rng.gen::<u8>());
             }
-            let hiermap = Map::build(&map, &mut BuildOptions::default()).unwrap();
+            let hiermap = Map::<u64,u8>::build(&map, &mut BuildOptions::default()).unwrap();
             for (k,v) in map.iter() {
-                assert_eq!(hiermap.query(&k), *v);
+                assert_eq!(hiermap.try_query(&k), Some(*v));
             }
         }
     }

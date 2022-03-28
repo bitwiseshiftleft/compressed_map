@@ -189,27 +189,39 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
             }
             assert!(phase_to_resolve.len() == i+1);
         }
+
+        let mut phase_offsets = Vec::with_capacity(nphases);
+        let mut total = n_omo;
+        for i in 0..nphases {
+            phase_offsets[i] = total;
+            total += phase_item_counts[i];
+        }
     
-        /* OK, for each phase, what's constrained that phase? */
-        let mut constrained_in_phase : Vec<Vec<(&K, Response)>> = (0..nphases).map(
-            |ph| Vec::with_capacity(phase_item_counts[ph])
-        ).collect();
-        let mut odd_men_out = Vec::with_capacity(n_omo);
+        /* Sort by phase */
+        let no_key = unimplemented!("TODO");
+        let mut values_by_phase = vec![(no_key,0 as Locator); total];
+        let mut phase_offsets_cur = phase_offsets.clone();
         let mut current_values = vec![0 as Locator; n_omo];
+        let mut omo_offset = 0;
         map.into_iter().for_each(|(k,v)| {
             let vi = value_map[v];
+            let (_c,lo,_hi) = interval_vec[vi];
             if vi == odd_man_out {
-                odd_men_out.push(k);
+                values_by_phase[omo_offset] = (k,lo);
+                omo_offset += 1;
                 let _ign = k;
             } else {
                 let ph = phase_to_resolve[vi] as usize;
-                let phlo = phase_bits[ph] & !(phase_bits[ph]-1);
-                let (_c,lo,_hi) = interval_vec[vi];
-                constrained_in_phase[vi as usize].push((k,(lo/phlo) as Response));
+                values_by_phase[phase_offsets_cur[ph]] = (k,lo);
+                phase_offsets_cur[ph] += 1;
             }
         });
 
         /* Implement the plan! */
+        let mut phase_care = FilteredVec {
+            vec: values_by_phase,
+            filter: BitSet::with_capacity(total)
+        };
         let mut salt = vec![0u8];
         let mut core = Vec::new();
         let mut tries = options.max_tries;
@@ -220,16 +232,11 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
             let phase_shift = phase_bits[phase].trailing_zeros();
             let mut phase_options = BuildOptions::default(); /* TODO */
 
-            /* TODO: whoops, this is cumulative! 
-             * Need to include items from past phases too!
-             * Plan: sort items by phase, maybe, and then make
-             * a FilteredVecIterator.
-             */
-            let phase_care = &constrained_in_phase[phase];
-            unimplemented!("TODO: deal with OMO");
+            unimplemented!("TODO: Filter by phase");
 
-            if let Some(phase_map) = Map::build_from_vec(&phase_care, &mut phase_options) {
+            if let Some(phase_map) = Map::<K,Locator>::build::<FilteredVec<K>>(&phase_care, &mut phase_options) {
                 salt.push(0);
+                core.push(phase_map.core);
                 /* ... if we even care about OMO this phase ... */
                 unimplemented!("TODO: update current_values");
             } else {
@@ -250,29 +257,30 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
 }
 
 /** Utility: vector with bitset selecting which of its elements are iterated over. */
-struct FilteredVec<T> {
-    vec: Vec<T>,
+struct FilteredVec<'a,T> {
+    vec: Vec<(&'a T,Locator)>,
     filter: BitSet
 }
 
 struct FilteredVecIterator<'a,T> {
-    vec: &'a Vec<T>,
+    vec: &'a Vec<(&'a T,Locator)>,
     bsi: BitSetIterator<'a>
 }
 
 impl <'a,T> Iterator for FilteredVecIterator<'a,T> {
-    type Item = &'a T;
+    type Item = (&'a T, &'a Locator);
     fn size_hint(&self) -> (usize,Option<usize>) { self.bsi.size_hint() }
-    fn next(&mut self) -> Option<&'a T> {
+    fn next(&mut self) -> Option<(&'a T, &'a Locator)> {
         let i = self.bsi.next()?;
-        Some(&self.vec[i])
+        let (k,v) = &self.vec[i];
+        Some((k,&v))
     }
 }
 
 impl <'a,T> ExactSizeIterator for FilteredVecIterator<'a,T> {}
 
-impl <'a,T> IntoIterator for &'a FilteredVec<T> {
-    type Item = &'a T;
+impl <'a,'b,T> IntoIterator for &'a FilteredVec<'b,T> {
+    type Item = (&'a T, &'a Locator);
     type IntoIter = FilteredVecIterator<'a,T>;
     fn into_iter(self) -> FilteredVecIterator<'a,T> {
         FilteredVecIterator { vec: &self.vec, bsi: self.filter.into_iter() }
