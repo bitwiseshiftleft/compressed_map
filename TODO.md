@@ -1,6 +1,7 @@
 
 # Rust port
 
+* Since we aren't counting outliers, no need to backtrack in nonu::build; can just do for 0..nphases
 * Clean up code TODOs
 * Rename functions for clarity
 * Rename Map and NonUniformMap to CompressedMap etc.
