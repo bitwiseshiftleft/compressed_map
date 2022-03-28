@@ -7,6 +7,7 @@
  */
 
 use crate::uniform::{MapCore,Map,Response,BuildOptions};
+use crate::tilematrix::bitset::{BitSet,BitSetIterator};
 use std::collections::HashMap;
 use core::marker::PhantomData;
 use std::hash::Hash;
@@ -245,5 +246,35 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
             core: core,
             _phantom: PhantomData::default()
         })
+    }
+}
+
+/** Utility: vector with bitset selecting which of its elements are iterated over. */
+struct FilteredVec<T> {
+    vec: Vec<T>,
+    filter: BitSet
+}
+
+struct FilteredVecIterator<'a,T> {
+    vec: &'a Vec<T>,
+    bsi: BitSetIterator<'a>
+}
+
+impl <'a,T> Iterator for FilteredVecIterator<'a,T> {
+    type Item = &'a T;
+    fn size_hint(&self) -> (usize,Option<usize>) { self.bsi.size_hint() }
+    fn next(&mut self) -> Option<&'a T> {
+        let i = self.bsi.next()?;
+        Some(&self.vec[i])
+    }
+}
+
+impl <'a,T> ExactSizeIterator for FilteredVecIterator<'a,T> {}
+
+impl <'a,T> IntoIterator for &'a FilteredVec<T> {
+    type Item = &'a T;
+    type IntoIter = FilteredVecIterator<'a,T>;
+    fn into_iter(self) -> FilteredVecIterator<'a,T> {
+        FilteredVecIterator { vec: &self.vec, bsi: self.filter.into_iter() }
     }
 }

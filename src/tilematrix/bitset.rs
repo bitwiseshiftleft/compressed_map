@@ -88,12 +88,12 @@ impl BitSet {
         }
         ret
     }
+}
 
-    /** Iterate over self */
-    #[allow(dead_code)]
-    pub fn iter(&self) -> BitSetIterator {
-        BitSetIterator { set: &self, offset:0, cur:0 }
-    }
+impl <'a> IntoIterator for &'a BitSet {
+    type Item = usize;
+    type IntoIter = BitSetIterator<'a>;
+    fn into_iter(self) -> BitSetIterator<'a> { BitSetIterator { set: self, offset:0, cur: 0 }}
 }
 
 pub struct BitSetIterator<'a> {
@@ -120,7 +120,16 @@ impl <'a> Iterator for BitSetIterator<'a> {
             }
         }
     }
+
+    /** Size hint is exact */
+    fn size_hint(&self) -> (usize,Option<usize>) {
+        let count = self.set.count_within(self.offset..self.set.set.len()*64)
+                  + self.cur.count_ones() as usize;
+        (count,Some(count))
+    }
 }
+
+impl <'a> ExactSizeIterator for BitSetIterator<'a> {}
 
 
 #[cfg(test)]

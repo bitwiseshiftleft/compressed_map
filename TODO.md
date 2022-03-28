@@ -1,6 +1,7 @@
 
 # Rust port
 
+* Rename T to K
 * Make uniform maps return-type-flexible?
 * Nonuniform maps
 * Make sure nonuniform maps work with 0 items

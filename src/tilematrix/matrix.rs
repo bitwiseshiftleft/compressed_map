@@ -932,7 +932,7 @@ mod tests {
 
                 /* Check that it's really in echelon form */
                 let mut which_row = 0;
-                for ech in in_ech.iter() {
+                for ech in in_ech.into_iter() {
                     for row in 0..x0.rows {
                         assert_eq!(x0.get_bit(row,ech), row==which_row);
                     }
