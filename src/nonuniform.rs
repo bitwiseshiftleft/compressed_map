@@ -167,6 +167,7 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
          * Which is the index of non-power-of-2 item, if any?
          */
         let mut odd_man_out = usize::MAX;
+        let mut n_omo = 0;
         let mut phase_to_resolve = Vec::with_capacity(interval_vec.len());
         let mut phase_item_counts = vec![0;nphases];
         for i in 0..interval_vec.len() {
@@ -174,6 +175,7 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
             let width = (hi-lo).wrapping_add(1);
             if width & width.wrapping_sub(1) != 0 {
                 odd_man_out = i;
+                n_omo = c;
                 phase_to_resolve.push(u8::MAX);
             } else {
                 for phase in 0..nphases {
@@ -191,10 +193,12 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
         let mut constrained_in_phase : Vec<Vec<(&K, Response)>> = (0..nphases).map(
             |ph| Vec::with_capacity(phase_item_counts[ph])
         ).collect();
+        let mut odd_men_out = Vec::with_capacity(n_omo);
+        let mut current_values = vec![0 as Locator; n_omo];
         map.into_iter().for_each(|(k,v)| {
             let vi = value_map[v];
             if vi == odd_man_out {
-                unimplemented!("TODO: deal with OMO");
+                odd_men_out.push(k);
                 let _ign = k;
             } else {
                 let ph = phase_to_resolve[vi] as usize;
@@ -212,14 +216,21 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
         /* Phase by phase */
         while tries > 0 && salt.len() <= nphases {
             let phase = salt.len()-1;
+            let phase_shift = phase_bits[phase].trailing_zeros();
             let mut phase_options = BuildOptions::default(); /* TODO */
 
+            /* TODO: whoops, this is cumulative! 
+             * Need to include items from past phases too!
+             * Plan: sort items by phase, maybe, and then make
+             * a FilteredVecIterator.
+             */
             let phase_care = &constrained_in_phase[phase];
             unimplemented!("TODO: deal with OMO");
 
             if let Some(phase_map) = Map::build_from_vec(&phase_care, &mut phase_options) {
                 salt.push(0);
-                unimplemented!("TODO: update OMO values");
+                /* ... if we even care about OMO this phase ... */
+                unimplemented!("TODO: update current_values");
             } else {
                 salt[phase] = salt[phase].checked_add(1)?;
                 tries -= 1;
