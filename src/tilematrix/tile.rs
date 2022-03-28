@@ -100,7 +100,19 @@ impl Tile {
 
     /** Permute our columns in place */
     pub fn mut_permute_columns(&mut self, perm: &Permutation) {
-        vectorized::mut_permute_columns(self,perm);
+        #[cfg(target_arch="x86_64")]
+        if vectorized_avx2::is_available() {
+            vectorized_avx2::mut_permute_columns(self,perm);
+            return ();
+        }
+
+        #[cfg(target_arch="aarch64")]
+        if vectorized_neon::is_available() {
+            vectorized_neon::mut_permute_columns(self,perm);
+            return ();
+        }
+
+        scalar_core::mut_permute_columns(self,perm);
     }
 
     /** Permute our columns out of place */
@@ -117,7 +129,17 @@ impl Tile {
 
     /** Compose permutations */
     pub fn compose_permutations(perm1: &Permutation, perm2: &Permutation) -> Permutation {
-        vectorized::compose_permutations(perm1,perm2)
+        #[cfg(target_arch="x86_64")]
+        if vectorized_avx2::is_available() {
+            return vectorized_avx2::compose_permutations(perm1,perm2);
+        }
+
+        #[cfg(target_arch="aarch64")]
+        if vectorized_neon::is_available() {
+            return vectorized_neon::compose_permutations(perm1,perm2);
+        }
+
+        scalar_core::compose_permutations(perm1,perm2)
     }
 
     fn broadcast_row1(storage:Storage, row:Index) -> Storage {
@@ -454,14 +476,10 @@ impl Distribution<Tile> for Standard {
  * this is a linear 8->8 function, which can be decomposed as two 4->8
  * on the nibbles.  These can be computed using two vector permute operations.
  * 
- * TODO: port the avx2 version
  * TODO: feature gate intrinsic versions
  **************************************************************************/
-#[cfg(not(any(target_arch="aarch64",all(target_arch="x86_64",target_feature="avx2"))))]
-pub mod vectorized {
+mod scalar_core {
     use crate::tile::{Tile,Permutation,PERMUTE_ZERO,PERMUTE_ALL_ZERO,Index};
-    pub type MulTable = Tile;
-    pub fn compile_mul_table(a:Tile) -> MulTable { a }
     pub fn mut_permute_columns(a:&mut Tile, permutation:&Permutation) {
         let mut ret = Tile::ZERO;
         for i in 0..Tile::EDGE_BITS {
@@ -483,8 +501,8 @@ pub mod vectorized {
 }
 
 
-#[cfg(all(target_arch="x86_64",target_feature="avx2"))]
-pub mod vectorized {
+#[cfg(target_arch="x86_64")]
+mod vectorized_avx2 {
     use std::ops::Mul;
     use crate::tile::{Tile,Permutation,PERMUTE_ZERO,PERMUTE_ALL_ZERO,STORAGE_PER};
     use core::arch::x86_64::*;
@@ -493,6 +511,9 @@ pub mod vectorized {
     pub struct MulTable {
         table : [__m256i; 4]
     }
+
+    #[inline(always)]
+    pub fn is_available() -> bool { is_x86_feature_detected!("avx2") }
 
     /** "Permute" columns of the tile according to "permutation".
      * New column x = old column permutation(x).
@@ -580,7 +601,7 @@ pub mod vectorized {
 }
 
 #[cfg(all(target_arch="aarch64"))]
-pub mod vectorized {
+mod vectorized_neon {
     use std::ops::Mul;
     use crate::tile::{Tile,Permutation,PERMUTE_ZERO,PERMUTE_ALL_ZERO,STORAGE_PER};
     use core::arch::aarch64::*;
@@ -589,6 +610,10 @@ pub mod vectorized {
     pub struct MulTable {
         table : [(uint8x16_t,uint8x16_t); 4]
     }
+
+    /** As far as I know, NEON is mandatory on aarch64 */
+    #[inline(always)]
+    pub fn is_available() -> bool { true }
 
     /** "Permute" columns of the tile according to "permutation".
      * New column x = old column permutation(x).
@@ -690,8 +715,21 @@ pub mod vectorized {
 pub fn row_mul_acc(c:&mut [Tile], a:Tile, b:&[Tile]) {
     let len = min(b.len(),c.len());
     if !a.is_zero() {
-        let a_study = vectorized::compile_mul_table(a);
-        for i in 0..len { c[i] ^= a_study * b[i]; }
+        #[cfg(target_arch="x86_64")]
+        if vectorized_avx2::is_available() {
+            let a_study = vectorized_avx2::compile_mul_table(a);
+            for i in 0..len { c[i] ^= a_study * b[i]; }
+            return ();
+        }
+
+        #[cfg(target_arch="aarch64")]
+        if vectorized_neon::is_available() {
+            let a_study = vectorized_neon::compile_mul_table(a);
+            for i in 0..len { c[i] ^= a_study * b[i]; }
+            return ();
+        }
+
+        for i in 0..len { c[i] ^= a * b[i]; }
     }
 }
 
@@ -700,8 +738,21 @@ pub fn row_mul(a:Tile, b:&mut [Tile]) {
     if a.is_zero() {
         for i in 0..b.len() { b[i] = Tile::ZERO; }
     } else {
-        let a_study = vectorized::compile_mul_table(a);
-        for i in 0..b.len() { b[i] = a_study * b[i]; }
+        #[cfg(target_arch="x86_64")]
+        if vectorized_avx2::is_available() {
+            let a_study = vectorized_avx2::compile_mul_table(a);
+            for i in 0..b.len() { b[i] = a_study * b[i]; }
+            return ();
+        }
+
+        #[cfg(target_arch="aarch64")]
+        if vectorized_neon::is_available() {
+            let a_study = vectorized_neon::compile_mul_table(a);
+            for i in 0..b.len() { b[i] = a_study * b[i]; }
+            return ();
+        }
+
+        for i in 0..b.len() { b[i] = a * b[i]; }
     }
 }
 
@@ -719,8 +770,22 @@ pub fn bulk_swap2_rows(a: &mut [Tile], b: &mut [Tile], ra:Index, rb:Index, nrows
 pub fn bulk_swap_rows(a: &mut [Tile], ra:Index, rb:Index, nrows: usize) {
     let mut op = Tile::IDENTITY;
     op.mut_swap_cols(rb,ra,nrows); // swapping rows of id is the same as swapping columns
-    let study = vectorized::compile_mul_table(op);
-    for i in 0..a.len() { a[i] = study * a[i]; }
+
+    #[cfg(target_arch="x86_64")]
+    if vectorized_avx2::is_available() {
+        let study = vectorized_avx2::compile_mul_table(op);
+        for i in 0..a.len() { a[i] = study * a[i]; }
+        return ();
+    }
+
+    #[cfg(target_arch="aarch64")]
+    if vectorized_neon::is_available() {
+        let study = vectorized_neon::compile_mul_table(op);
+        for i in 0..a.len() { a[i] = study * a[i]; }
+        return ();
+    }
+
+    for i in 0..a.len() { a[i] = op * a[i]; }
 }
 
 /**************************************************************************
@@ -728,8 +793,11 @@ pub fn bulk_swap_rows(a: &mut [Tile], ra:Index, rb:Index, nrows: usize) {
  **************************************************************************/
 #[cfg(test)]
 mod tests {
-    use crate::tile::{Edge,Tile,row_mul,row_mul_acc,PERMUTE_ZERO,PERMUTE_ALL_ZERO};
-    use crate::tile::vectorized;
+    use crate::tile::{Edge,Tile,row_mul,row_mul_acc,PERMUTE_ZERO,PERMUTE_ALL_ZERO,scalar_core};
+    #[cfg(target_arch="x86_64")]
+    use crate::tile::vectorized_avx2;
+    #[cfg(target_arch="aarch64")]
+    use crate::tile::vectorized_neon;
     use rand::{Rng,thread_rng};
 
     fn random_tile() -> Tile { thread_rng().gen::<Tile>() }
@@ -805,10 +873,21 @@ mod tests {
     #[test]
     fn vectorized() {
         for _ in 0..100 {
-            let t = random_tile();
-            let u = random_tile();
-            let s = vectorized::compile_mul_table(t);
-            assert_eq!(s*u,t*u);
+            #[cfg(target_arch="x86_64")]
+            if vectorized_avx2::is_available() {
+                let t = random_tile();
+                let u = random_tile();
+                let s = vectorized_avx2::compile_mul_table(t);
+                assert_eq!(s*u,t*u);
+            }
+
+            #[cfg(target_arch="aarch64")]
+            if vectorized_neon::is_available() {
+                let t = random_tile();
+                let u = random_tile();
+                let s = vectorized_neon::compile_mul_table(t);
+                assert_eq!(s*u,t*u);
+            }
         }
     }
 
@@ -847,7 +926,7 @@ mod tests {
             let avail = thread_rng().gen::<Edge>();
             let (psi,perm,ech) = t.pseudoinverse(avail);
             let mut prod = psi * t;
-            vectorized::mut_permute_columns(&mut prod, &perm);
+            scalar_core::mut_permute_columns(&mut prod, &perm);
             assert_eq!(prod & Tile::IDENTITY, prod);
             for i in 0..Tile::EDGE_BITS {
                 let x = perm[i];
@@ -901,7 +980,18 @@ mod tests {
                     q[i] = tmp as u8;
                 };
                 assert_eq!(t*&p, t*pmatrix);
-                assert_eq!((t*&p)*&q, t*&vectorized::compose_permutations(&q,&p));
+
+
+                #[cfg(target_arch="x86_64")]
+                if vectorized_avx2::is_available() {
+                    assert_eq!((t*&p)*&q, t*&vectorized_avx2::compose_permutations(&q,&p));
+                }
+
+                #[cfg(target_arch="aarch64")]
+                if vectorized_neon::is_available() {
+                    assert_eq!((t*&p)*&q, t*&vectorized_neon::compose_permutations(&q,&p));
+                }
+                assert_eq!((t*&p)*&q, t*&scalar_core::compose_permutations(&q,&p));
             }
         }
     }

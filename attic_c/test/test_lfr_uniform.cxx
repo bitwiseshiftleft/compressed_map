@@ -174,7 +174,7 @@ int main(int argc, const char **argv) {
             record(&start,&ignored);
         
             int allpass = 1;
-            for (unsigned i=0; i<rows; i++) {
+            for (unsigned i=0; i<rows && success; i++) {
                 uint64_t ret = map.lookup(&keys[i*keylen], keylen);
                 if (ret != (values[i] & mask)) {
                     if (verbose) printf("  Fail in row %lld: should be 0x%llx, actually 0x%llx\n",
@@ -184,8 +184,8 @@ int main(int argc, const char **argv) {
                 }
             }
             record(&start,&tot_query);
-            if (allpass && verbose) printf("  Pass!\n");
-            passes += allpass;
+            if (allpass && success && verbose) printf("  Pass!\n");
+            passes += success && allpass;
             record(&start, &tot_query);
         }
 
