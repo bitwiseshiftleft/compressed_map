@@ -44,6 +44,26 @@
  * `false`, but there is a false positive probability.  By default this is 2<sup>-8</sup>, but
  * you can control it using the `bits_per_value` field in [`BuildOptions`].
  * 
+ * # Space usage
+ * 
+ * [`ApproxSet`] and [`CompressedRandomMap`] use approximately `bits_per_value` bits per entry
+ * in the map.  By default, this is 8 bits for [`ApproxSet`], and the maximum bit-length of
+ * any input for [`CompressedRandomMap`].
+ * 
+ * [`CompressedMap`] uses approximately H0(V) * (1+overhead) bits per entry.  Here H0(V) is
+ * the [Shannon entropy](https://en.wikipedia.org/wiki/Entropy_(information_theory)) of the
+ * distribution of values --- e.g. it is 1 for a map whose values
+ * are (50% `true`, 50% `false`), and 0.081 for a map that's (1% `true`, 99% `false`).  The
+ * overhead is 0.001 to 0.11 = 0.1% to 11%, depending on the distribution: it's worst for maps
+ * that are about 80% one value and 20% another value.
+ * 
+ * [`CompressedMap`] also stores a table of possible values; internally it is compressing an
+ * index into that table.  This table is not compressed, so maps with many giant objects as
+ * values won't compress very well.
+ * 
+ * All of these structures have small constant or nearly-constant overheads as well --
+ * for example, they contain lengths, hash keys and padding.
+ * 
  * # Performance
  * 
  * Querying any of these maps or sets is very fast, in most cases around 100-200 cycles
@@ -59,6 +79,9 @@
  * a [`CompressedRandomMap`] with 100 million entries takes around 2 minutes and 8 gigabytes of memory.
  * Construction is theoretically Õ(n<sup>3/2</sup>), but in practice is dominated by Õ(n) memory
  * copies and O(n log n) memory consumption.
+ * 
+ * Building an [`ApproxSet`] is similar in performance to a [`CompressedRandomMap`] of the
+ * same size.
  * 
  * The performance of building a [`CompressedMap`] depends mostly on the population of its
  * second-most-common value; the most-common values usually just have to be counted and queried

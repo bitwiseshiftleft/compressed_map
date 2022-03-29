@@ -494,7 +494,7 @@ pub struct BuildOptions{
      * the storage required by the ApproxSet (which is about
      * `bits_per_value` per element in the set).
      * 
-     * Ignored by [`CompressedMap`].
+     * Ignored by [`CompressedMap`](crate::CompressedMap).
      *
      * Default: `None`.  When building an [`ApproxSet`], `None`
      * will be interpreted as 8 bits per value.
