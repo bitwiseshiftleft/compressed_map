@@ -31,14 +31,14 @@
  * A lower-level building block is [`CompressedRandomMap<K,V>`].  These work much
  * the same as `CompressedMap`s, but they return integer types such as `i8`.  They
  * are efficient when the values are approximately uniformly random up to a certain
- * bit length (e.g., when they are random in `0..32`).  When queried with a key
+ * bit length (e.g., when they are random in `0..16`).  When queried with a key
  * that wasn't in the original map, they return an arbitrary value of the appropriate
  * bit length --- not necessarily one of the original keys.
  * 
  * # Approximate sets
  * 
- * These operate much like static [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter).
- * They are constructed from a set `set`, e.g. a [`HashMap`](std::collections::hash_set::HashSet).
+ * These [`ApproxSet`]s operate much like static [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter).
+ * They are constructed from a set `set`, e.g. a [`HashSet`](std::collections::hash_set::HashSet).
  * When you query `approx_set.probably_contains(x)`, then if `set.contains(x)` you will 
  * always receive `true`.  On the other hand, if `!set.contains(x)`, then you will usually receive
  * `false`, but there is a false positive probability.  By default this is 2<sup>-8</sup>, but
@@ -66,7 +66,7 @@
  * 
  * # Performance
  * 
- * Querying any of these maps or sets is very fast, in most cases around 100-200 cycles
+ * Querying any of these maps or sets is very fast, typically around 100-200 cycles
  * if the map is in cache.  The process typically uses 2 sequential groups of memory
  * lookups in a large array, and the memory lookups themselves are often nearby, so it should
  * be reasonably fast even if the map is on disk.  (TODO: support `mmap`.)
@@ -114,6 +114,13 @@
  *   has deterministic collisions for unequal keys.
  * * If you supply a key that's constructed non-randomly, if an attacker can predict it, then they
  *   can cause your map construction to repeatedly fail.
+ *
+ * # Serialization
+ * 
+ * You can use the [`SimpleSerialize`] implementations to serialize [`CompressedMap`],[`ApproxSet`]
+ * and [`CompressedRandomMap`] to bytes, or deserialize them from bytes.
+ * 
+ * TODO: allow to query from a file / mmap?
  */
 
 
@@ -129,7 +136,7 @@ pub mod tilematrix;
 mod uniform;
 mod nonuniform;
 
-pub use uniform::{BuildOptions,CompressedRandomMap,ApproxSet};
+pub use uniform::{BuildOptions,CompressedRandomMap,ApproxSet,SimpleSerialize};
 pub use nonuniform::{CompressedMap};
 
 use tilematrix::tile;

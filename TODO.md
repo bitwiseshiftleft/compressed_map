@@ -1,8 +1,8 @@
 
 # Rust port
 
-* Use Borrow to make the code more generic
-* Is there a way to have a borrowed and owned version?  Eg maybe Cow?
+* Use Borrow to make the code more generic?
+* Use outer struct with AsRef, and eliminate MapCore?
 * Use boxed slices instead of Vec?
 * Mark vectorized APIs as unsafe.
 * Clean up code TODOs
@@ -10,7 +10,10 @@
 * Decide on assert! / debug_assert! / nothing
 * C / C++ interface
 * Demo app
-* File handling / serde
+* Examples in doc
+* File handling
+* (de)serialize CompressedMap
+* Make sure it builds with AVX2 when possible
 
 ## Rust performance:
 

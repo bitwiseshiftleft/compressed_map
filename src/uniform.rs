@@ -241,6 +241,7 @@ pub(crate) fn choose_key(base_key: Option<HasherKey>, n:usize) -> HasherKey {
 }
 
 /** Untyped core of a mapping object. */
+#[derive(Eq,PartialEq,Ord,PartialOrd,Clone,Debug)]
 pub(crate) struct MapCore {
     /** The SipHash key used to hash inputs. */
     pub(crate) hash_key: HasherKey,
@@ -252,6 +253,83 @@ pub(crate) struct MapCore {
     pub nblocks: usize,
 
     pub(crate) blocks: Vec<LfrBlock>,
+}
+
+/** Simple serializer for bytes.
+ * 
+ * On serialize, first get a length, then serialize into a byte
+ * array of that length.
+ * 
+ * Deserialize from byte arrays that are exactly the right size.
+ * Return None for any failure.
+ */
+pub trait SimpleSerialize where Self:Sized {
+    /** Return the serialized size of self, in bytes */
+    fn ser_size(&self) -> usize;
+
+    /** Serialize self into an already-allocated array of bytes */
+    fn serialize_into(&self, bytes: &mut[u8]);
+
+    /** Deserialize self from a string of bytes, or fail */
+    fn deserialize(bytes: &[u8]) -> Option<Self>;
+
+    /** Default: serialize self into a Vec and return it */
+    fn serialize(&self) -> Vec<u8> {
+        let mut ret = vec![0u8;self.ser_size()];
+        self.serialize_into(&mut ret);
+        ret
+    }
+}
+
+impl SimpleSerialize for Vec<LfrBlock> {
+    fn ser_size(&self) -> usize { self.len() * BLOCKSIZE }
+    fn serialize_into(&self, bytes: &mut[u8]) {
+        for (i,b) in self.into_iter().enumerate() {
+            bytes[i*BLOCKSIZE..(i+1)*BLOCKSIZE].copy_from_slice(&b.to_le_bytes());
+        }
+    }
+    fn deserialize(bytes:&[u8]) -> Option<Self> {
+        if (bytes.len() % BLOCKSIZE) != 0 { return None; }
+        let blocks = bytes.len()/BLOCKSIZE;
+        let mut result = vec![0;blocks];
+        for i in 0..blocks {
+            result[i] = LfrBlock::from_le_bytes(bytes[i*BLOCKSIZE..(i+1)*BLOCKSIZE].try_into().unwrap());
+        }
+        Some(result)
+    }
+}
+
+impl SimpleSerialize for MapCore {
+    fn ser_size(&self) -> usize { 20 + self.blocks.len() * BLOCKSIZE }
+    fn serialize_into(&self, bytes: &mut[u8]) {
+        bytes[0..3].copy_from_slice("MC1".as_bytes());
+        bytes[3] = self.bits_per_value as u8;
+        bytes[4..20].copy_from_slice(&self.hash_key);
+        self.blocks.serialize_into(&mut bytes[20..]);
+    }
+    fn deserialize(bytes:&[u8]) -> Option<Self> {
+        if bytes.len() < 20 { return None; }
+        if bytes[0..3] != *"MC1".as_bytes() { return None; }
+        let bits_per_value = bytes[3] as usize;
+        if bits_per_value > Response::BITS as usize { return None; }
+
+       let nblocks = if bits_per_value == 0 {
+            if bytes.len() != 20 { return None; }
+            2
+        } else {
+            if (bytes.len()-20) % (bits_per_value * BLOCKSIZE) != 0 { return None; }
+            (bytes.len()-20) / (bits_per_value * BLOCKSIZE)
+        };
+        if nblocks == 1 { return None; }
+
+        let blocks = Vec::<LfrBlock>::deserialize(&bytes[20..])?;
+        Some(MapCore {
+            hash_key: bytes[4..20].try_into().unwrap(),
+            bits_per_value: bits_per_value,
+            nblocks: nblocks,
+            blocks: blocks
+        })
+    }
 }
 
 impl MapCore {
@@ -333,6 +411,16 @@ impl MapCore {
         bits_per_value:usize,
         hash_key:&HasherKey
     ) -> Option<MapCore> {
+        if bits_per_value == 0 {
+            /* force nblocks to 2 */
+            return Some(MapCore{
+                hash_key: *hash_key,
+                bits_per_value: bits_per_value,
+                nblocks: 2,
+                blocks: vec![],
+            });
+        }
+
         let nitems = iter.len();
         let mask = if bits_per_value == Response::BITS as usize { !0 }
             else { (1<<bits_per_value)-1 };
@@ -396,7 +484,7 @@ impl MapCore {
 }
 
 /**
- * Compressed uniform static functions.
+ * Lower-level: compressed uniform static functions.
  * 
  * These functions are a building block of the generic case.  They are
  * efficient when the value being mapped to is approximately uniformly
@@ -406,6 +494,7 @@ impl MapCore {
  * They don't store a table of `V`'s: instead they are limited to
  * returning numeric types of at most 64 bits.
  */
+#[derive(Eq,PartialEq,Ord,PartialOrd,Clone,Debug)]
 pub struct CompressedRandomMap<K,V> {
     /** Untyped map object, consulted after hashing. */
     pub(crate) core: MapCore,
@@ -426,6 +515,7 @@ pub struct CompressedRandomMap<K,V> {
  * set, you will always get `true`.  If you query an object not in the set,
  * you will usually get `false`, but not always.
  */
+#[derive(Eq,PartialEq,Ord,PartialOrd,Clone,Debug)]
 pub struct ApproxSet<K> {
     /** Untyped map object, consulted after hashing. */
     core: MapCore,
@@ -513,6 +603,15 @@ pub struct BuildOptions{
      * Default: 0.
      */
     pub shift: u8
+}
+
+impl <K,V> SimpleSerialize for CompressedRandomMap<K,V> {
+    fn ser_size(&self) -> usize { self.core.ser_size() }
+    fn serialize_into(&self, bytes: &mut[u8]) { self.core.serialize_into(bytes); }
+    fn deserialize(bytes: &[u8]) -> Option<Self> {
+        let core = MapCore::deserialize(bytes)?;
+        Some(CompressedRandomMap { core: core, _phantom:PhantomData::default() })
+    }
 }
 
 impl Default for BuildOptions {
@@ -606,6 +705,15 @@ where Response:From<V> {
     }
 }
 
+impl <K> SimpleSerialize for ApproxSet<K> {
+    fn ser_size(&self) -> usize { self.core.ser_size() }
+    fn serialize_into(&self, bytes: &mut[u8]) { self.core.serialize_into(bytes); }
+    fn deserialize(bytes: &[u8]) -> Option<Self> {
+        let core = MapCore::deserialize(bytes)?;
+        Some(ApproxSet { core: core, _phantom:PhantomData::default() })
+    }
+}
+
 impl <K:Hash> ApproxSet<K> {
     /** Default bits per value if none is specified. */
     const DEFAULT_BITS_PER_VALUE : usize = 8;
@@ -671,7 +779,7 @@ impl <K:Hash> ApproxSet<K> {
 
 #[cfg(test)]
 mod tests {
-    use crate::uniform::{ApproxSet,CompressedRandomMap,BuildOptions};
+    use crate::uniform::{ApproxSet,CompressedRandomMap,BuildOptions,SimpleSerialize};
     use rand::{thread_rng,Rng};
     use std::collections::{HashMap,HashSet};
 
@@ -685,9 +793,15 @@ mod tests {
                 map.insert(rng.gen::<u64>(), rng.gen::<u8>());
             }
             let hiermap = CompressedRandomMap::<u64,u8>::build(&map, &mut BuildOptions::default()).unwrap();
+
             for (k,v) in map.iter() {
                 assert_eq!(hiermap.try_query(&k), Some(*v));
             }
+
+            let ser = hiermap.serialize();
+            let deser = CompressedRandomMap::<u64,u8>::deserialize(&ser);
+            assert!(deser.is_some());
+            assert_eq!(hiermap, deser.unwrap()); 
         }
     }
 
@@ -714,6 +828,11 @@ mod tests {
             }
             // println!("{} false positives", false_positives);
             assert!((false_positives as f64) < mu + 4.*mu.sqrt());
+            
+            let ser = hiermap.serialize();
+            let deser = ApproxSet::<u64>::deserialize(&ser);
+            assert!(deser.is_some());
+            assert_eq!(hiermap, deser.unwrap()); 
         }
     }
 }

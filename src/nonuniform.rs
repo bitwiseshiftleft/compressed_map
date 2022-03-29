@@ -76,7 +76,9 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
         total_width = total_width.wrapping_add(width);
     }
 
-    /* Sort them into priority order by "fit" */
+    /* Sort them into priority order by "fit".  This is used to expand them
+     * in case they sum to < the width.
+     */
     fn compare_fit<T>(a1:&(&T,Locator,usize),a2:&(&T,Locator,usize)) -> Ordering {
         let (_k1,w1,c1) = *a1;
         let (_k2,w2,c2) = *a2;
@@ -158,10 +160,10 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> CompressedMap<K,V> {
     {
         /* Count the items and formulate a plan */
         let mut counts = HashMap::new();
-        for v in map.into_iter().map(|(_k,v)| v) {
+        map.into_iter().for_each(|(_k,v)| {
             let counter = counts.entry(v).or_insert(0);
             *counter += 1;
-        }
+        });
 
         if counts.len() == 0 {
             return None;
