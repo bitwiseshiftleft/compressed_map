@@ -7,7 +7,6 @@
 * Mark vectorized APIs as unsafe.
 * Clean up code TODOs
 * Rename functions for clarity
-* Rename Map and NonUniformMap to CompressedMap etc.
 * Decide on assert! / debug_assert! / nothing
 * C / C++ interface
 * Demo app
