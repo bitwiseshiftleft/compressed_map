@@ -1,6 +1,5 @@
-
 use criterion::{criterion_group, criterion_main, Criterion};
-use sparselinear::uniform::{Map,BuildOptions};
+use compressed_map::{CompressedRandomMap,BuildOptions};
 use rand::{thread_rng,Rng};
 use std::collections::HashMap;
 
@@ -36,7 +35,7 @@ fn criterion_benchmark(crit: &mut Criterion) {
         let mut options = BuildOptions::default();
         crit.bench_function(&format!("uniform build {}",size),
             |crit| crit.iter(|| {
-                umap = Map::build(&map, &mut options);
+                umap = CompressedRandomMap::build(&map, &mut options);
                 assert!(umap.is_some()); /* Assert success */
                 total_tries += options.try_num + 1;
                 total_builds += 1;
@@ -84,7 +83,7 @@ fn criterion_benchmark_slow(crit: &mut Criterion) {
         let mut options = BuildOptions::default();
         crit.bench_function(&format!("uniform build {}",size),
             |crit| crit.iter(|| {
-                umap = Map::build(&map, &mut options);
+                umap = CompressedRandomMap::build(&map, &mut options);
                 assert!(umap.is_some()); /* Assert success */
                 total_tries += options.try_num + 1;
                 total_builds += 1;

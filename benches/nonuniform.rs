@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use sparselinear::nonuniform::{NonUniformMap,BuildOptions};
+use compressed_map::{CompressedMap,BuildOptions};
 use rand::{thread_rng,Rng};
 use std::collections::HashMap;
 
@@ -24,7 +24,7 @@ fn criterion_benchmark(crit: &mut Criterion) {
     let mut umap = None;
     crit.bench_function(&format!("nonu build {}+{}",yes,no),
     |crit| crit.iter(|| {
-        umap = NonUniformMap::build(&map, &mut options);
+        umap = CompressedMap::build(&map, &mut options);
         assert!(umap.is_some()); /* Assert success */
     }));
 

@@ -396,14 +396,17 @@ impl MapCore {
 }
 
 /**
- * Compressed static function of type `K -> u64`.
- *
- * These objects can be constructed from a mapping type or vector of
- * pairs.  They can then be queried with a given `K`; if that `K` was
- * included in the map during construction, then the corresponding value
- * will be returned.  Otherwise, an arbitrary value will be returned.
+ * Compressed uniform static functions.
+ * 
+ * These functions are a building block of the generic case.  They are
+ * efficient when the value being mapped to is approximately uniformly
+ * random from a power-of-2 interval, i.e. all values are about equally
+ * likely.
+ * 
+ * They don't store a table of `V`'s: instead they are limited to
+ * returning numeric types of at most 64 bits.
  */
-pub struct Map<K,V> {
+pub struct CompressedRandomMap<K,V> {
     /** Untyped map object, consulted after hashing. */
     pub(crate) core: MapCore,
 
@@ -420,7 +423,7 @@ pub struct Map<K,V> {
  * 
  * There is a small, adjustable false positive probability.  There are no
  * false negatives.  That is, if you query an object that really was in the
- * set, you will always get `true`.  If you query an ojbect not in the set,
+ * set, you will always get `true`.  If you query an object not in the set,
  * you will usually get `false`, but not always.
  */
 pub struct ApproxSet<K> {
@@ -432,14 +435,17 @@ pub struct ApproxSet<K> {
 }
 
 /**
- * Options to build a Map or ApproxSet.
+ * Options to build a [`CompressedMap`](crate::CompressedMap),
+ * [`CompressedRandomMap`] or [`ApproxSet`].
  * 
  * Implements `Default`, so you can get reasonable options
- * with BuildOptions::default().
+ * with `BuildOptions::default()`.
  */
 #[derive(Copy,Clone,PartialEq,Eq,Debug,Ord,PartialOrd)]
 pub struct BuildOptions{
     /**
+     * How many times to try building the set?
+     * 
      * The operation to build a map or approximate set
      * fails around 1%-10% of the time.  The builder will
      * automatically try up to this number of times.  It is
@@ -458,40 +464,53 @@ pub struct BuildOptions{
     pub max_tries : usize,
 
     /**
-     * In-out-parameter from build: on which try did the build
-     * succeed?  If passed in as nonzero, the counter starts here.
+     * In-out-parameter from build.
+     * 
+     * On which try did the build succeed?  If passed in
+     * as nonzero, the counter starts here.  Mostly useful
+     * for diagnostics.
      */
     pub try_num: usize,
 
     /** 
      * Optional hash key to make building deterministic.
      * If a key is given, then the actual key used will be
-     * derived from that key and from the try count.
-     * If omitted, a random key will be selected for each try.
+     * derived from that key and from `try_num`.
+     * If omitted, a fresh random key will be selected for
+     * each try.
      *
      * Default: `None`.
      */
-    pub key_gen   : Option<HasherKey>, 
+    pub key_gen : Option<HasherKey>, 
 
     /**
      * Override the number of bits to return per value.
      * If given, all values will be truncated to that many
-     * bits.  If omitted, the bit length of the largest
-     * input value will be used.
+     * least-significant bits.  If omitted, the bit length
+     * of the largest input value will be used.
      * 
-     * When building an ApproxSet, this determines the failure
-     * probability (which is 2^-`bits_per_value`) and the storage
-     * required by the ApproxSet (which is about `bits_per_value`
-     * per element in the set).  For building an ApproxSet, this
-     * defaults to 8.
+     * When building an [`ApproxSet`], this determines the failure
+     * probability (which is 2<sup>-`bits_per_value`</sup>) and
+     * the storage required by the ApproxSet (which is about
+     * `bits_per_value` per element in the set).
+     * 
+     * Ignored by [`CompressedMap`].
      *
-     * Default: `None`.
+     * Default: `None`.  When building an [`ApproxSet`], `None`
+     * will be interpreted as 8 bits per value.
      */
     pub bits_per_value : Option<u8>,
 
     /**
-     * Values will be shifted right by this many bits before
-     * encoding.  Used by nonuniform.
+     * When constructing a [`CompressedRandomMap`], shift the
+     * inputs right by this amount.  This is used by
+     * [`CompressedMap`](crate::CompressedMap) to construct
+     * several [`CompressedRandomMap`]s capturing different
+     * bits of the input, without rewriting a giant vector.
+     * 
+     * TODO: maybe remove this and handle a different way?
+     * 
+     * Default: 0.
      */
     pub shift: u8
 }
@@ -514,7 +533,7 @@ fn next_power_of_2_ge(x:usize) -> usize {
     1 << (usize::BITS - (x-1).leading_zeros())
 }
 
-impl <K:Hash,V:Copy> Map<K,V>
+impl <K:Hash,V:Copy> CompressedRandomMap<K,V>
 where Response:From<V> {
     /**
      * Build a uniform map.
@@ -594,10 +613,15 @@ impl <K:Hash> ApproxSet<K> {
     /**
      * Build an approximate set.
      *
-     * This function takes an iterable collection of items `x` and constructs
-     * a compressed representation of the collection.  If you query `k` on the compressed
-     * mapping, `query` will return the corresponding `v`.  If you query any `k`
-     * not included in the original list, the return value will be arbitrary.
+     * This function takes an iterable collection `set` of items and constructs
+     * a compressed representation of the collection.  If you query
+     * `result.probably_contains(x)`, then if `set.contains(x)` you will
+     * always get `true`.  If `!set.contains(x)` you will usually get `false`,
+     * but with some small probability you will instead get `true`.  The false
+     * positive probability can be configured by changing the `bits_per_value`
+     * of the [`BuildOptions`] you pass: it is approximately 2<sup>-`bits_per_value`</sup>,
+     * and the storage required for the set is approximately `bits_per_value` bits
+     * per element of `set`.
      *
      * You can pass a `HashSet<K>`, `BTreeSet<K>` etc.  If you pass a non-set
      * type then be careful: any duplicate `K` entries will cause the build
@@ -647,7 +671,7 @@ impl <K:Hash> ApproxSet<K> {
 
 #[cfg(test)]
 mod tests {
-    use crate::uniform::{ApproxSet,Map,BuildOptions};
+    use crate::uniform::{ApproxSet,CompressedRandomMap,BuildOptions};
     use rand::{thread_rng,Rng};
     use std::collections::{HashMap,HashSet};
 
@@ -660,7 +684,7 @@ mod tests {
             for _j in 0..99*i {
                 map.insert(rng.gen::<u64>(), rng.gen::<u8>());
             }
-            let hiermap = Map::<u64,u8>::build(&map, &mut BuildOptions::default()).unwrap();
+            let hiermap = CompressedRandomMap::<u64,u8>::build(&map, &mut BuildOptions::default()).unwrap();
             for (k,v) in map.iter() {
                 assert_eq!(hiermap.try_query(&k), Some(*v));
             }

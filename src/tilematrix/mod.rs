@@ -10,12 +10,15 @@
  */
 
 /** Small fixed-size matrix "tiles" for implementing larger matrices. */
-pub mod tile;
+pub(crate) mod tile;
 
 /** Fast matrix library made of tile matrices. */
 pub mod matrix;
 
-/** Simple bit sets.  The bit-set crate is actually kind of slow,
+/**
+ * Simple bit sets.
+ * 
+ * The bit-set crate is actually kind of slow,
  * and was bottlenecking the code.
  */
-pub mod bitset;
+pub(crate) mod bitset;

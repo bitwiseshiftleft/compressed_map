@@ -6,13 +6,12 @@
  * Nonuniform sparse linear map implementation.
  */
 
-use crate::uniform::{MapCore,Map,LfrBlock,self};
+use crate::uniform::{MapCore,CompressedRandomMap,LfrBlock,BuildOptions};
 use crate::tilematrix::bitset::{BitSet,BitSetIterator};
 use std::collections::HashMap;
 use core::marker::PhantomData;
 use std::hash::Hash;
 use std::cmp::{min,Ord,Ordering};
-pub type BuildOptions = uniform::BuildOptions;
 
 type Locator = u32;
 type Plan = Locator;
@@ -120,7 +119,14 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
     (plan, value_map, interval_vec, resp)
 }
 
-pub struct NonUniformMap<K,V> {
+/**
+ * Compressed static functions.
+ *
+ * These functions are slightly slower than UniformMap, but they perform
+ * efficiently even if not all values are equally likely.  They also accept
+ * non-numeric types.
+ */
+pub struct CompressedMap<K,V> {
     plan: Plan,
     response_map: ResponseMap<V>,
     salt: Vec<u8>,
@@ -128,7 +134,7 @@ pub struct NonUniformMap<K,V> {
     _phantom: PhantomData<K>
 }
 
-impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
+impl <K:Hash+Eq,V:Hash+Ord+Clone> CompressedMap<K,V> {
     /**
      * Build a nonuniform map.
      *
@@ -146,7 +152,7 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
      *
      * Ignores the BuildOptions' shift and bits_per_value.
      */
-    pub fn build<'a, Collection>(map: &'a Collection, options: &mut BuildOptions) -> Option<NonUniformMap<K,V>>
+    pub fn build<'a, Collection>(map: &'a Collection, options: &mut BuildOptions) -> Option<CompressedMap<K,V>>
     where for<'b> &'b Collection: IntoIterator<Item=(&'b K, &'b V)>,
           <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator
     {
@@ -161,7 +167,7 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
             return None;
         } else if counts.len() == 1 {
             let v = counts.keys().next().unwrap();
-            return Some(NonUniformMap {
+            return Some(CompressedMap {
                 plan: 0,
                 response_map: vec![(0,(*v).clone())],
                 salt: vec![],
@@ -258,20 +264,19 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
             vec: values_by_phase,
             filter: BitSet::with_capacity(total)
         };
-        let mut salt = vec![0u8];
+        let mut salt = Vec::new();
         let mut core : Vec<MapCore> = Vec::new();
         let mut tries = options.try_num;
 
         /* Phase by phase */
-        while tries < options.max_tries && salt.len() <= nphases {
-            let phase = salt.len()-1;
+        for phase in 0..nphases {
             let bits_this_phase = phase_bits[phase];
             let phase_shift = bits_this_phase.trailing_zeros();
             let phase_nbits = bits_this_phase.count_ones();
             let parent_key  = if phase == 0 { options.key_gen } else { Some(core[phase-1].hash_key) };
             let mut phase_options = BuildOptions {
-                max_tries: min(salt[phase] as usize + options.max_tries - tries,255),
-                try_num: salt[phase] as usize,
+                max_tries: min(options.max_tries - tries,255),
+                try_num: 0,
                 key_gen: parent_key,
                 bits_per_value: Some(phase_nbits as u8),
                 shift: phase_shift as u8
@@ -291,36 +296,27 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
                 phase_care.filter.union_with_range(0..omo_offset);
             }
 
-            if let Some(phase_map) = Map::<K,Locator>::build::<FilteredVec<K>>(&phase_care, &mut phase_options) {
-                tries += phase_options.try_num - salt[phase] as usize;
-                salt[phase] = phase_options.try_num as u8;
-                salt.push(0);
-                if phase >= min_phase_affecting_omo && phase < phase_omo {
-                    for i in 0..omo_offset {
-                        let (k,_) = phase_care.vec[i];
-                        current_values[i] = (current_values[i] & !bits_this_phase)
-                            | (phase_map.try_query(k).unwrap() << phase_shift);
-                    }
+            /* Solve the phase */
+            let phase_map = CompressedRandomMap::<K,Locator>::build::<FilteredVec<K>>(&phase_care, &mut phase_options)?;
+            tries += phase_options.try_num as usize;
+            salt.push(phase_options.try_num as u8);
+            if phase >= min_phase_affecting_omo && phase < phase_omo {
+                for i in 0..omo_offset {
+                    let (k,_) = phase_care.vec[i];
+                    current_values[i] |= phase_map.try_query(k).unwrap() << phase_shift;
                 }
-                core.push(phase_map.core);
-            } else {
-                salt[phase] = salt[phase].checked_add(1)?;
-                tries -= 1;
             }
+            core.push(phase_map.core);
         }
 
         options.try_num = tries;
-        if tries >= options.max_tries {
-            None // Fail!
-        } else {
-                Some(NonUniformMap {
-                plan: plan,
-                response_map: response_map,
-                salt: salt[1..nphases].to_vec(),
-                core: core,
-                _phantom: PhantomData::default()
-            })
-        }
+        Some(CompressedMap {
+            plan: plan,
+            response_map: response_map,
+            salt: salt[1..nphases].to_vec(),
+            core: core,
+            _phantom: PhantomData::default()
+        })
     }
 
     fn bsearch<'a>(&'a self, low: Locator, high: Locator) -> Option<&'a V> {
@@ -356,11 +352,9 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
         }
 
         plan = self.plan;
-        let mut phase = nphases - 1;
-        loop {
+        for phase in (0..nphases).rev() {
             let h = high_bit(plan);
             plan ^= 1<<h;
-
             if phase+2 != nphases {
                 let thisphase = self.core[phase].query_hash(key) as Locator;
                 locator |= thisphase << h;
@@ -369,12 +363,9 @@ impl <K:Hash+Eq,V:Hash+Ord+Clone> NonUniformMap<K,V> {
                     return result;
                 }
             }
-
-            if phase == 0 { break; }
-            phase -= 1;
         };
         
-        unreachable!("Map must have been constructed wrong; we should have a response by now")
+        unreachable!("CompressedRandomMap must have been constructed wrong; we should have a response by now")
     }
 
     /** Return the size of core storage, in bytes */
@@ -422,12 +413,12 @@ impl <'a,'b,T> IntoIterator for &'a FilteredVec<'b,T> {
 #[cfg(test)]
 mod tests {
     use rand::{thread_rng,Rng};
-    use crate::nonuniform::{NonUniformMap,BuildOptions};
+    use crate::nonuniform::{CompressedMap,BuildOptions};
     use std::collections::HashMap;
 
     #[test]
     fn test_nonuniform_map() {
-        assert!(NonUniformMap::build(&HashMap::<u32,u32>::new(), &mut BuildOptions::default()).is_none());
+        assert!(CompressedMap::build(&HashMap::<u32,u32>::new(), &mut BuildOptions::default()).is_none());
         for i in 0u32..100 {
             let mut map = HashMap::new();
             let mut rng = thread_rng();
@@ -445,7 +436,7 @@ mod tests {
                 }
                 map.insert(rng.gen::<u32>(), v);
             }
-            let compressed_map = NonUniformMap::build(&map, &mut BuildOptions::default()).unwrap();
+            let compressed_map = CompressedMap::build(&map, &mut BuildOptions::default()).unwrap();
 
             for (k,v) in map {
                 assert_eq!(compressed_map.query(&k), &v);

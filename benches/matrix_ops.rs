@@ -1,6 +1,6 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use sparselinear::tilematrix::matrix::Matrix;
+use compressed_map::tilematrix::matrix::Matrix;
 use std::cmp::max;
 
 fn criterion_benchmark(crit: &mut Criterion) {
