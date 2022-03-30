@@ -513,7 +513,7 @@ mod vectorized_avx2 {
     }
 
     #[inline(always)]
-    pub fn is_available() -> bool { true /*is_x86_feature_detected!("avx2")*/ }
+    pub fn is_available() -> bool { is_x86_feature_detected!("avx2") }
 
     /** "Permute" columns of the tile according to "permutation".
      * New column x = old column permutation(x).
