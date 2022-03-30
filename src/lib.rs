@@ -114,13 +114,6 @@
  *   has deterministic collisions for unequal keys.
  * * If you supply a key that's constructed non-randomly, if an attacker can predict it, then they
  *   can cause your map construction to repeatedly fail.
- *
- * # Serialization
- * 
- * You can use the [`SimpleSerialize`] implementations to serialize [`CompressedMap`],[`ApproxSet`]
- * and [`CompressedRandomMap`] to bytes, or deserialize them from bytes.
- * 
- * TODO: allow to query from a file / mmap?
  */
 
 
