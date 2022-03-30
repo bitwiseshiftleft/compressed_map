@@ -513,7 +513,7 @@ mod vectorized_avx2 {
     }
 
     #[inline(always)]
-    pub fn is_available() -> bool { is_x86_feature_detected!("avx2") }
+    pub fn is_available() -> bool { true /*is_x86_feature_detected!("avx2")*/ }
 
     /** "Permute" columns of the tile according to "permutation".
      * New column x = old column permutation(x).
@@ -524,6 +524,7 @@ mod vectorized_avx2 {
      * PERF: adding a permute2 would improve performance for certain column
      * ops on neon, but possibly not on AVX2
      */
+    #[inline(always)]
     pub fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
         unsafe {
             let addr = permutation as *const u8 as *const __m128i;
@@ -534,6 +535,7 @@ mod vectorized_avx2 {
         }
     }
 
+    #[inline(always)]
     pub fn compose_permutations(perm1:&Permutation, perm2:&Permutation) -> Permutation {
         unsafe {
             let mut ret:Permutation = PERMUTE_ALL_ZERO;
@@ -547,6 +549,7 @@ mod vectorized_avx2 {
     }
 
     /** Precompute multiples of a tile in order to speed up vectorized multiplication */
+    #[inline(always)]
     pub fn compile_mul_table(t:Tile) -> MulTable {
         unsafe {
             let mut abcd = _mm256_loadu_si256(&t.storage[0] as *const u64 as *const __m256i);
@@ -580,6 +583,7 @@ mod vectorized_avx2 {
 
     impl Mul<Tile> for MulTable {
         type Output = Tile;
+        #[inline(always)]
         fn mul(self, tv: Tile) -> Tile {
             let mut ret = [0u64; STORAGE_PER];
             unsafe {
