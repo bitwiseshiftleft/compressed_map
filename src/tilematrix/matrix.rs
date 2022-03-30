@@ -49,6 +49,45 @@ impl Matrix {
         self.tiles.shrink_to_fit();
     }
 
+    #[allow(dead_code)]
+    /** Debug: is this a valid matrix?  i.e. does it have any ones outside of bound */
+    pub fn is_valid(&self) -> bool {
+        let trows = tiles_spanning(self.rows);
+        let tcols = tiles_spanning(self.cols_main);
+        let taugs = tiles_spanning(self.cols_aug);
+        let ebits = Tile::EDGE_BITS;
+        let last_col_mask = if self.cols_main%ebits != 0 {
+            Tile::cols_mask(0,self.cols_main%ebits)
+        } else {
+            Tile::FULL
+        };
+        let last_aug_mask = if self.cols_aug%ebits != 0 {
+            Tile::cols_mask(0,self.cols_aug%ebits)
+        } else {
+            Tile::FULL
+        };
+        for trow in 0..trows {
+            let row_mask = if trow==trows-1 && self.rows%ebits != 0 {
+                Tile::rows_mask(0,self.rows%ebits)
+            } else {
+                Tile::FULL
+            };
+            for tcol in 0..tcols {
+                let col_mask = if tcol==tcols-1 { last_col_mask } else { Tile::FULL };
+                if (self.tiles[self.stride*trow+tcol] & !(row_mask & col_mask)) != Tile::ZERO {
+                    return false;
+                }
+            }
+            for taug in 0..taugs {
+                let aug_mask = if taug==taugs-1 { last_aug_mask } else { Tile::FULL };
+                if (self.tiles[self.stride*trow+tcols+taug]) & !(row_mask & aug_mask) != Tile::ZERO {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     /** Add a row as a little-endian collection of bytes */
     pub fn mut_add_row_as_bytes(&mut self, bytes_main:&[u8], bytes_aug:&[u8]) {
         const EDGE_BYTES : usize = Tile::EDGE_BITS / 8;
@@ -95,6 +134,8 @@ impl Matrix {
 
     /** self += other */
     pub fn add_assign(&mut self, other: &Matrix) {
+        // debug_assert!(self.is_valid());
+        // debug_assert!(other.is_valid());
         let trows = tiles_spanning(min(self.rows,other.rows));
         let taugs = tiles_spanning(min(self.cols_aug,other.cols_aug));
         let off_self  = tiles_spanning(self.cols_main);
@@ -110,6 +151,7 @@ impl Matrix {
                     other.tiles[trow*other.stride+off_other+taug];
             }
         }
+        // debug_assert!(self.is_valid());
     }
 
     /** Reserve memory for extra rows */
@@ -166,6 +208,9 @@ impl Matrix {
      *     The augmentation on b will be ignored if the column counts don't match.
      */
     pub fn accum_mul(&mut self, a: &Matrix, b: &Matrix) {
+        // debug_assert!(self.is_valid());
+        // debug_assert!(a.is_valid());
+        // debug_assert!(b.is_valid());
         let trows    = tiles_spanning(min(self.rows,a.rows));
         let mut taug = tiles_spanning(min(self.cols_aug,b.cols_aug));
         let taug_a   = tiles_spanning(min(self.cols_aug,a.cols_aug));
@@ -192,6 +237,7 @@ impl Matrix {
                 self.tiles[offset+tcself+aug] ^= a.tiles[trow*a.stride+tca+aug];
             }
         }
+        // debug_assert!(self.is_valid());
     }
 
     /** Multiply self by another matrix, and return the result */
@@ -233,6 +279,7 @@ impl Matrix {
                 self.tiles[self.stride*trow+tcols+taug] = thread_rng().gen::<Tile>() & row_mask & aug_mask;
             }
         }
+        // debug_assert!(self.is_valid());
     }
 
     /** Return mutable aliases to two different rows of self.
@@ -290,6 +337,7 @@ impl Matrix {
      * Return the rank and a set of which columns are in echelon
      */
     pub fn rref(&mut self) -> (usize, BitSet) {
+        // debug_assert!(self.is_valid());
         let rows = self.rows;
         let cols = self.cols_main;
         let trows = tiles_spanning(rows);
@@ -402,12 +450,15 @@ impl Matrix {
             }
 
         }
+        // debug_assert!(self.is_valid());
     
         (rank, column_is_in_echelon)
     }
 
     /* Place the columns of the other matrix next to this one's, and add their aug components */
     pub fn append_columns(&self, rhs: &Matrix) -> Matrix {
+        // debug_assert!(self.is_valid());
+        // debug_assert!(rhs.is_valid());
         assert!(self.rows == rhs.rows);
         let mut ret = Matrix::new(self.rows, self.cols_main + rhs.cols_main, max(self.cols_aug,rhs.cols_aug));
         let tcols_self = tiles_spanning(self.cols_main);
@@ -458,6 +509,7 @@ impl Matrix {
                 ret.tiles[ret.stride*trow+tcols_ret+taug] += rhs.tiles[rhs.stride*trow+tcols_rhs+taug];
             }
         }
+        // debug_assert!(ret.is_valid());
         ret
     }
 
@@ -474,6 +526,7 @@ impl Matrix {
         want_yes: bool,
         want_no: bool
     ) -> (Matrix, Matrix) {
+        // debug_assert!(self.is_valid());
         let trows = tiles_spanning(self.rows);
         
         /* Allocate the results */
@@ -526,7 +579,7 @@ impl Matrix {
                 MASK
             };
 
-            let (yeses, nos) = (edge as Edge,(mask2^edge) as Edge);
+            let (yeses, nos) = (edge as Edge,(mask2 & !edge) as Edge);
             if want_yes && yeses != 0 {
                 let (s0,s1) = edge2perms(yeses, &mut offset_yes);
                 if offset_yes > EBITS {
@@ -565,6 +618,8 @@ impl Matrix {
                 offset_no %= EBITS;
             }
         }
+        // debug_assert!(yes.is_valid());
+        // debug_assert!(no.is_valid());
         (yes,no)
     }
 
@@ -575,6 +630,7 @@ impl Matrix {
      * Doesn't take offsets or want_* because libfrayed doesn't need them
      */
     pub fn partition_rows(&self, rows: &BitSet) -> (Matrix,Matrix) {
+        // debug_assert!(self.is_valid());
         const EBITS:usize = Tile::EDGE_BITS as usize;
         let tcols = tiles_spanning(self.cols_main) + tiles_spanning(self.cols_aug);
         
@@ -610,11 +666,14 @@ impl Matrix {
                 offset_no %= EBITS;
             }
         }
+        // debug_assert!(yes.is_valid());
+        // debug_assert!(no.is_valid());
         (yes,no)
     }
 
     /** Return two matrices: one with the rows of self less than row, and one with more than row */
     pub fn split_at_row(&self, row:usize) -> (Matrix, Matrix) {
+        // debug_assert!(self.is_valid());
         debug_assert!(row <= self.rows);
         let tcols = tiles_spanning(self.cols_main) + tiles_spanning(self.cols_aug);
         let mut top = Matrix::new(row,           self.cols_main, self.cols_aug);
@@ -654,6 +713,8 @@ impl Matrix {
             }
         }
 
+        // debug_assert!(top.is_valid());
+        // debug_assert!(bot.is_valid());
         (top,bot)
     }
 
@@ -663,6 +724,8 @@ impl Matrix {
      * take the rows from self according to the bitset, or from other.
      */
     pub fn interleave_rows(&self, other: &Matrix, take_from_self: &BitSet) -> Matrix {
+        // debug_assert!(self.is_valid());
+        // debug_assert!(other.is_valid());
         const EBITS:usize = Tile::EDGE_BITS as usize;
         debug_assert_eq!(take_from_self.len(), self.rows);
         debug_assert_eq!(self.cols_main, other.cols_main);
@@ -701,6 +764,7 @@ impl Matrix {
                 offset_no %= EBITS;
             }
         }
+        // debug_assert!(result.is_valid());
         result
     }
 
@@ -818,6 +882,7 @@ fn co_edge2perms(e:Edge, offset: &mut usize) -> (Permutation,Permutation) {
  **************************************************************************/
 
 /** A matrix in systematic form, with the systematic columns omitted. */
+#[derive(Debug,Clone)]
 pub struct Systematic {
     pub rhs     : Matrix,
     pub echelon : BitSet
@@ -849,8 +914,10 @@ impl Systematic {
             (sys_total_cols - group.cols_main, 0)
         };
 
+
         /* The ones in echelon are canceled out by applying sys.rhs */
         let (to_multiply, mut to_copy) = group.partition_columns(&self.echelon, before, after, true, true);
+
         to_copy.accum_mul(&to_multiply, &self.rhs);
         to_copy
     }

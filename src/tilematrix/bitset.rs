@@ -8,9 +8,25 @@
  */
 
 use core::ops::Range;
+use core::fmt::{Debug,Formatter,Error};
 
+#[derive(Clone)]
 pub struct BitSet {
     set: Vec<u64>
+}
+
+impl Debug for BitSet {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        let mut comma = false;
+        for x in self {
+            if comma { 
+                write!(f,",")?;
+            }
+            write!(f,"{}",x)?;
+            comma = true;
+        }
+        Ok(())
+    }
 }
 
 impl BitSet {

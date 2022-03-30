@@ -129,14 +129,17 @@
  *
  * GF(2) matrix ops implemented using tiles and the Method of the
  * Four Russians.  This is internal, and only exposed for benchmarking.
- *
- * TODO: eventually this should be private
  */
+#[cfg(bench)]
 pub mod tilematrix;
+
+#[cfg(not(bench))]
+mod tilematrix;
+
 mod uniform;
 mod nonuniform;
 
-pub use uniform::{BuildOptions,CompressedRandomMap,ApproxSet,SimpleSerialize};
+pub use uniform::{BuildOptions,CompressedRandomMap,ApproxSet};
 pub use nonuniform::{CompressedMap};
 
 use tilematrix::tile;

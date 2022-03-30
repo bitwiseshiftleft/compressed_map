@@ -128,6 +128,7 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
  * efficiently even if not all values are equally likely.  They also accept
  * non-numeric types.
  */
+#[derive(Eq,PartialEq,Ord,PartialOrd,Clone,Debug)]
 pub struct CompressedMap<K,V> {
     plan: Plan,
     response_map: ResponseMap<V>,
@@ -414,7 +415,8 @@ impl <'a,'b,T> IntoIterator for &'a FilteredVec<'b,T> {
 
 #[cfg(test)]
 mod tests {
-    use rand::{thread_rng,Rng};
+    use rand::{Rng,SeedableRng};
+    use rand::rngs::StdRng;
     use crate::nonuniform::{CompressedMap,BuildOptions};
     use std::collections::HashMap;
 
@@ -422,8 +424,10 @@ mod tests {
     fn test_nonuniform_map() {
         assert!(CompressedMap::build(&HashMap::<u32,u32>::new(), &mut BuildOptions::default()).is_none());
         for i in 0u32..100 {
+            let mut seed = [0u8;32];
+            seed[0..4].copy_from_slice(&i.to_le_bytes());
+            let mut rng : StdRng = SeedableRng::from_seed(seed);
             let mut map = HashMap::new();
-            let mut rng = thread_rng();
             let n_items = i/10+1;
             let pr_splits : Vec<f64> = (0..n_items).map(|_| rng.gen_range(0.0..1.0)).collect();
 
@@ -438,8 +442,13 @@ mod tests {
                 }
                 map.insert(rng.gen::<u32>(), v);
             }
-            let compressed_map = CompressedMap::build(&map, &mut BuildOptions::default()).unwrap();
 
+            let mut options = BuildOptions::default();
+            options.key_gen = Some(seed[..16].try_into().unwrap());
+
+            let compressed_map = CompressedMap::build(&map, &mut options).unwrap();
+
+            /* FIXME! Sometimes this gives the wrong answer.  Why? */
             for (k,v) in map {
                 assert_eq!(compressed_map.query(&k), &v);
             }
