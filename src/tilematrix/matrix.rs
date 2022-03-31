@@ -39,16 +39,6 @@ impl Matrix {
         Matrix { rows, cols_main, cols_aug, stride, tiles }
     }
 
-    /** Clears self and deallocates its memory */
-    pub fn clear(&mut self) {
-        self.rows = 0;
-        self.cols_main = 0;
-        self.cols_aug = 0;
-        self.stride = 0;
-        self.tiles.clear();
-        self.tiles.shrink_to_fit();
-    }
-
     #[allow(dead_code)]
     /** Debug: is this a valid matrix?  i.e. does it have any ones outside of bound */
     pub fn is_valid(&self) -> bool {
@@ -672,9 +662,15 @@ impl Matrix {
     }
 
     /** Return two matrices: one with the rows of self less than row, and one with more than row */
-    pub fn split_at_row(&self, row:usize) -> (Matrix, Matrix) {
+    pub fn split_at_row(self, row:usize) -> (Matrix, Matrix) {
         // debug_assert!(self.is_valid());
         debug_assert!(row <= self.rows);
+
+        if row == self.rows {
+            let other = Matrix::new(0,self.cols_main,self.cols_aug);
+            return (self, other);
+        }
+
         let tcols = tiles_spanning(self.cols_main) + tiles_spanning(self.cols_aug);
         let mut top = Matrix::new(row,           self.cols_main, self.cols_aug);
         let mut bot = Matrix::new(self.rows-row, self.cols_main, self.cols_aug);

@@ -17,6 +17,7 @@ use std::mem::replace;
 use siphasher::sip128::{Hasher128, SipHasher13, Hash128};
 use serde::{Serialize,Deserialize};
 use std::sync::{Mutex,Condvar};
+use std::thread::{spawn,available_parallelism};
 use std::sync::atomic::{AtomicBool,Ordering};
 
 /** Space of responses in dictionary impl. */
@@ -148,13 +149,6 @@ impl<T> Channel<T> {
         Some(())
     }
 
-    fn write_maybe(&self, t:Option<T>) -> Option<()> {
-        let mut cur = self.current.lock().ok()?;
-        *cur = match t { Some(x) => Full(x), None => Expired };
-        self.condvar.notify_all();
-        Some(())
-    }
-
     fn expire(&self) -> Option<()> {
         let mut cur = self.current.lock().ok()?;
         *cur = Expired;
@@ -162,7 +156,7 @@ impl<T> Channel<T> {
         Some(())
     }
 
-    fn reserve(&mut self) -> bool {
+    fn reserve(&self) -> bool {
         self.available.swap(false,Ordering::Relaxed)
     }
 }
@@ -173,17 +167,15 @@ struct BlockGroup {
     fwd_solution:   Channel<(Matrix, Vec<RowIdx>, usize)>, // with RowIdx::MAX appended for convenience
     bwd_solution:   Channel<Matrix>,
     /* Systematic form of solution; number of expected rows in reverse solution for left side */
-    systematic:     Channel<(Systematic,usize)>,
-    empty:          bool
+    systematic:     Channel<(Systematic,usize)>
 }
 
 impl BlockGroup {
-    fn new(empty:bool) -> BlockGroup {
+    fn new() -> BlockGroup {
         BlockGroup {
             bwd_solution: Channel::new(),
             fwd_solution: Channel::new(),
-            systematic:   Channel::new(),
-            empty: empty
+            systematic:   Channel::new()
         }
     }
 }
@@ -196,16 +188,8 @@ impl BlockGroup {
  *
  * Fails if the block group doesn'K have full row-rank.
  */
-fn forward_solve(left:&mut BlockGroup, right:&mut BlockGroup, center: &mut BlockGroup) -> Option<()> {
+fn forward_solve(left:&BlockGroup, right:&BlockGroup, center: &BlockGroup) -> Option<()> {
     if !center.fwd_solution.reserve() { return Some(()); }
-    if right.empty {
-        let tmp = left.fwd_solution.ctake();
-        let (is_some,load) = if let Some ((_,_,l)) = &tmp { (true,*l) } else { (false,0) };
-        center.fwd_solution.write_maybe(tmp);
-        center.systematic.write((Systematic::identity(0),load));
-        center.empty = left.empty;
-        return if is_some { Some(()) } else { None };
-    }
 
     let (lsol, lrow_ids, lload) = if let Some(x) = left.fwd_solution.ctake() { x } else {
         center.systematic.expire();
@@ -217,6 +201,13 @@ fn forward_solve(left:&mut BlockGroup, right:&mut BlockGroup, center: &mut Block
         center.fwd_solution.expire();
         return None;
     };
+
+    if rsol.rows == 0 && rsol.cols_main == 0 {
+        /* empty */
+        center.fwd_solution.write((lsol, lrow_ids, lload));
+        center.systematic.write((Systematic::identity(0),lload));
+        return Some(());
+    }
 
     /* Mergesort the row IDs */
     let mut left_to_merge = BitSet::with_capacity(lsol.rows);
@@ -248,8 +239,6 @@ fn forward_solve(left:&mut BlockGroup, right:&mut BlockGroup, center: &mut Block
     }
     row_ids.push(RowIdx::MAX);
 
-    /* Memory efficiency: drop the row IDs */
-
     /* Sort out the rows */
     let (lmerge,lkeep) = lsol.partition_rows(&left_to_merge);
     let (rmerge,rkeep) = rsol.partition_rows(&right_to_merge);
@@ -262,7 +251,6 @@ fn forward_solve(left:&mut BlockGroup, right:&mut BlockGroup, center: &mut Block
         let interleaved = lproj.interleave_rows(&rproj, &interleave_left);
         center.fwd_solution.write((interleaved, row_ids, systematic.rhs.cols_main));
         center.systematic.write((systematic,lload));
-        center.empty = false;
         Some(())
     } else {
         center.systematic.expire();
@@ -275,7 +263,7 @@ fn forward_solve(left:&mut BlockGroup, right:&mut BlockGroup, center: &mut Block
  * Backward solve step.
  * Solve the matrix by substitution.
  */
-fn backward_solve(center: &mut BlockGroup, left:&mut BlockGroup, right:&mut BlockGroup) -> Option<()> {
+fn backward_solve(center: &BlockGroup, left:&BlockGroup, right:&BlockGroup) -> Option<()> {
     if !left.bwd_solution.reserve() { return Some(()); }
     let csol = if let Some(csol) = center.bwd_solution.ctake() {
         csol
@@ -291,15 +279,9 @@ fn backward_solve(center: &mut BlockGroup, left:&mut BlockGroup, right:&mut Bloc
     };
     let solution = csys.rhs.mul(&csol);
     let solution = solution.interleave_rows(&csol, &csys.echelon);
-    
-    if right.empty {
-        left.bwd_solution.write(solution);
-        right.bwd_solution.write(Matrix::new(0,0,0));
-    } else {
-        let (lsol,rsol) = solution.split_at_row(load);
-        left.bwd_solution.write(lsol);
-        right.bwd_solution.write(rsol);
-    }
+    let (lsol,rsol) = solution.split_at_row(load);
+    left.bwd_solution.write(lsol);
+    right.bwd_solution.write(rsol);
     Some(())
 }
 
@@ -414,14 +396,13 @@ impl MapCore {
     }
 
     /** Solve a hierarchical matrix constructed for the uniform map */
-    fn build(mut blocks: Vec<BlockGroup>, naug:usize, nblocks:usize, hash_key: &HasherKey) -> Option<MapCore> {
+    fn build(blocks: Vec<BlockGroup>, naug:usize, nblocks:usize, hash_key: &HasherKey) -> Option<MapCore> {
+
         let mut halfstride = 1;
         while halfstride < nblocks {
             let mut pos = 2*halfstride;
             while pos < blocks.len() {
-                let (l,r) = blocks.split_at_mut(pos);
-                let (c,rr) = r.split_at_mut(halfstride);
-                forward_solve(&mut l[pos-halfstride], &mut rr[0], &mut c[0])?;
+                forward_solve(&blocks[pos-halfstride], &blocks[pos+halfstride], &blocks[pos])?;
                 pos += 4*halfstride;
             }
             halfstride *= 2;
@@ -429,14 +410,17 @@ impl MapCore {
 
         /* Initialize backward solution at random */
         if blocks[halfstride].bwd_solution.reserve() {
-            let (_,_,load) = blocks[halfstride].fwd_solution.ctake()?; // todo expire
-            let mut seed = Matrix::new(0,0,naug);
-            seed.reserve_rows(load);
-            let empty = [];
-            for row in 0..load {
-                seed.mut_add_row_as_bytes(&empty, &MapCore::seed_row(hash_key, naug, row));
+            if let Some((_,_,load)) = blocks[halfstride].fwd_solution.ctake() {
+                let mut seed = Matrix::new(0,0,naug);
+                seed.reserve_rows(load);
+                let empty = [];
+                for row in 0..load {
+                    seed.mut_add_row_as_bytes(&empty, &MapCore::seed_row(hash_key, naug, row));
+                }
+                blocks[halfstride].bwd_solution.write(seed);
+            } else {
+                blocks[halfstride].bwd_solution.expire();
             }
-            blocks[halfstride].bwd_solution.write(seed);
         }
 
         /* Backward solve steps */
@@ -444,9 +428,7 @@ impl MapCore {
         while halfstride > 0 {
             let mut pos = 2*halfstride;
             while pos < blocks.len() {
-                let (l,r)  = blocks.split_at_mut(pos);
-                let (c,rr) = r.split_at_mut(halfstride);
-                backward_solve(&mut c[0], &mut l[pos-halfstride], &mut rr[0])?;
+                backward_solve(&blocks[pos], &blocks[pos-halfstride], &blocks[pos+halfstride])?;
                 pos += 4*halfstride;
             }
             halfstride /= 2;
@@ -521,13 +503,7 @@ impl MapCore {
         }
         
         /* Create the block groups from the blocks */
-        let block_groups : Vec<BlockGroup> = (0..nblocks_po2*2).map(|i|
-            if ((i&1) != 0) && i < 2*nblocks {
-                BlockGroup::new(false)
-            } else {
-                BlockGroup::new(true)
-            }
-        ).collect();
+        let block_groups : Vec<BlockGroup> = (0..nblocks_po2*2).map(|_| BlockGroup::new()).collect();
 
         for (i,(blk,mut row_ids)) in blocks.into_iter().zip(row_ids.into_iter()).enumerate() {
             row_ids.push(RowIdx::MAX); /* Append guard rowidx */
