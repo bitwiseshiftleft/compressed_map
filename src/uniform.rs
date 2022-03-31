@@ -13,12 +13,13 @@ use core::hash::Hash;
 use std::cmp::max;
 use rand::{RngCore};
 use rand::rngs::OsRng;
-use std::mem::replace;
+use std::mem::{drop,replace};
 use siphasher::sip128::{Hasher128, SipHasher13, Hash128};
 use serde::{Serialize,Deserialize};
-use std::sync::{Mutex,Condvar};
-use std::thread::{spawn,available_parallelism};
-use std::sync::atomic::{AtomicBool,Ordering};
+use std::sync::{Arc,Mutex,Condvar};
+use std::thread::{spawn,available_parallelism,JoinHandle};
+use std::sync::atomic::{AtomicBool,AtomicUsize,Ordering};
+use rayon::prelude::*;
 
 /** Space of responses in dictionary impl. */
 pub type Response = u64;
@@ -28,7 +29,7 @@ type LfrHasher = SipHasher13;
 /** A key for the SipHash13 hash function. */
 pub type HasherKey = [u8; 16];
 
-type RowIdx   = u64; // if u32 then limit to ~4b rows
+type RowIdx   = usize; // if u32 then limit to ~4b rows
 type BlockIdx = u32;
 pub(crate) type LfrBlock = u32;
 
@@ -190,7 +191,6 @@ impl BlockGroup {
  */
 fn forward_solve(left:&BlockGroup, right:&BlockGroup, center: &BlockGroup) -> Option<()> {
     if !center.fwd_solution.reserve() { return Some(()); }
-
     let (lsol, lrow_ids, lload) = if let Some(x) = left.fwd_solution.ctake() { x } else {
         center.systematic.expire();
         center.fwd_solution.expire();
@@ -396,8 +396,7 @@ impl MapCore {
     }
 
     /** Solve a hierarchical matrix constructed for the uniform map */
-    fn build(blocks: Vec<BlockGroup>, naug:usize, nblocks:usize, hash_key: &HasherKey) -> Option<MapCore> {
-
+    fn build(blocks: &Vec<BlockGroup>, naug:usize, nblocks:usize, hash_key: HasherKey) -> Option<()> {
         let mut halfstride = 1;
         while halfstride < nblocks {
             let mut pos = 2*halfstride;
@@ -415,7 +414,7 @@ impl MapCore {
                 seed.reserve_rows(load);
                 let empty = [];
                 for row in 0..load {
-                    seed.mut_add_row_as_bytes(&empty, &MapCore::seed_row(hash_key, naug, row));
+                    seed.mut_add_row_as_bytes(&empty, &MapCore::seed_row(&hash_key, naug, row));
                 }
                 blocks[halfstride].bwd_solution.write(seed);
             } else {
@@ -434,34 +433,15 @@ impl MapCore {
             halfstride /= 2;
         }
 
-        /* Serialize to core */
-        let mut core = vec![0; naug*nblocks];
-        for blki in 0..nblocks {
-            let bsol = &blocks[2*blki+1].bwd_solution.ctake().unwrap();
-            debug_assert_eq!(bsol.rows, BLOCKSIZE*8);
-            for aug in 0..naug {
-                let mut word = 0;
-                /* PERF: this could be faster, but do we care? */
-                for bit in 0..LfrBlock::BITS {
-                    word |= (bsol.get_aug_bit(bit as usize,aug) as LfrBlock) << bit;
-                }
-                core[blki*naug+aug] = word;
-            }
-        }
-
-        Some(MapCore{
-            bits_per_value: naug as u8,
-            blocks: core,
-            nblocks: nblocks,
-            hash_key: *hash_key
-        })
+        Some(())
     }
 
     /** Try once to build from an iterator. */
-    fn build_from_iter(
-        iter: &mut dyn ExactSizeIterator<Item=LfrRow>,
+    fn build_from_iter<'a,'b:'a, K:'b+Hash+Sync, V:'b+Into<Response>+Copy, Iter:ExactSizeIterator<Item=(&'b K,&'b V)>>(
+        iter: &'a mut Iter,
         bits_per_value:u8,
-        hash_key:&HasherKey
+        hash_key:&HasherKey,
+        shift: u8
     ) -> Option<MapCore> {
         if bits_per_value == 0 {
             /* force nblocks to 2 */
@@ -481,31 +461,52 @@ impl MapCore {
         const BYTES_PER_VALUE : usize = (Response::BITS as usize) / 8;
 
         /* Create the blocks */
-        let mut blocks : Vec<Matrix> = (0..nblocks).map(|_| {
-            let mut ret = Matrix::new(0,BLOCKSIZE*8, bits_per_value as usize);
-            ret.reserve_rows(BLOCKSIZE*8*2 * 5/4);
-            ret
-        }).collect();
-        let mut row_ids : Vec<Vec<RowIdx>> = (0..nblocks).map(|_| {
-            Vec::with_capacity(BLOCKSIZE*8*2 * 5/4)
+        let blocks : Vec<Mutex<(Matrix,Vec<RowIdx>)>> = (0..nblocks).map(|_| {
+            let mut blk = Matrix::new(0,BLOCKSIZE*8, bits_per_value as usize);
+            blk.reserve_rows(BLOCKSIZE*8*2 * 5/4);
+            let rowids = Vec::with_capacity(BLOCKSIZE*8*2 * 5/4);
+            Mutex::new((blk,rowids))
         }).collect();
 
-        let mut rowi=0;
-        for row in iter {
-            for i in [0,1] {
-                let blki = row.block_positions[i] as usize;
-                let aug_bytes = if i==0 { [0u8; BYTES_PER_VALUE] }
-                    else { (row.augmented & mask).to_le_bytes() };
-                blocks[blki].mut_add_row_as_bytes(&row.block_key[i].to_le_bytes(), &aug_bytes);
-                row_ids[blki].push(rowi);
-            }
-            rowi += 1;
-        }
+
+        /* Seed the items into the blocks.
+         * Perf: need to parallelize the hashing!
+         */
+        let items_vec: Vec<(&'a K, Response)> = iter.map(|(k,v)| (k,(*v).into())).collect();
+        let parallelism = available_parallelism().map(|x| x.get()).unwrap_or(1);
+        let atomic_rowi = AtomicUsize::new(0);
+        (0..items_vec.len()).into_par_iter().for_each(|i| {
+            let (k,v) = items_vec[i];
+            let mut row = hash_object_to_row(hash_key, nblocks, k);
+            row.augmented ^= v >> shift;
+
+            /* Acquire mutexes in order */
+            let (mut g0, mut g1) = if row.block_positions[0] < row.block_positions[1] {
+                let g0 = blocks[row.block_positions[0] as usize].lock().unwrap();
+                let g1 = blocks[row.block_positions[1] as usize].lock().unwrap();
+                (g0,g1)
+            } else {
+                let g1 = blocks[row.block_positions[1] as usize].lock().unwrap();
+                let g0 = blocks[row.block_positions[0] as usize].lock().unwrap();
+                (g0,g1)
+            };
+            let rowi = atomic_rowi.fetch_add(1,Ordering::Relaxed);
+            let (ref mut b0, ref mut r0) = *g0;
+            let (ref mut b1, ref mut r1) = *g1;
+            b0.mut_add_row_as_bytes(&row.block_key[0].to_le_bytes(), &[0u8; BYTES_PER_VALUE]);
+            b1.mut_add_row_as_bytes(&row.block_key[1].to_le_bytes(), &(row.augmented & mask).to_le_bytes());
+            r0.push(rowi);
+            r1.push(rowi);
+        });
+        drop(items_vec);
         
         /* Create the block groups from the blocks */
         let block_groups : Vec<BlockGroup> = (0..nblocks_po2*2).map(|_| BlockGroup::new()).collect();
 
-        for (i,(blk,mut row_ids)) in blocks.into_iter().zip(row_ids.into_iter()).enumerate() {
+        for (i,blk) in blocks.into_iter().enumerate() {
+            let (ref mut blk, ref mut row_ids) = *blk.lock().unwrap();
+            let blk = replace(blk,Matrix::new(0,0,0));
+            let mut row_ids = replace(row_ids, Vec::new());
             row_ids.push(RowIdx::MAX); /* Append guard rowidx */
             block_groups[2*i+1].fwd_solution.write((blk,row_ids,LfrBlock::BITS as usize));
         }
@@ -514,7 +515,40 @@ impl MapCore {
         }
 
         /* Solve it */
-        Self::build(block_groups, bits_per_value as usize, nblocks, hash_key)
+        let naug = bits_per_value as usize;
+        let hash_key_lit = *hash_key;
+        let arc_block_groups = Arc::new(block_groups);
+        let joins : Vec<JoinHandle<Option<()>>> = (0..parallelism-1).map(|_| {
+            let arc_block_groups = Arc::clone(&arc_block_groups);
+            spawn(move || Self::build(arc_block_groups.as_ref(), naug, nblocks, hash_key_lit))
+        }).collect();
+        let result = Self::build(arc_block_groups.as_ref(), naug, nblocks, hash_key_lit);
+        for j in joins {
+            j.join().ok()??;
+        }
+        result?;
+
+        /* Serialize to core */
+        let mut core = vec![0; naug*nblocks];
+        for blki in 0..nblocks {
+            let bsol = arc_block_groups[2*blki+1].bwd_solution.ctake().unwrap();
+            debug_assert_eq!(bsol.rows, BLOCKSIZE*8);
+            for aug in 0..naug {
+                let mut word = 0;
+                /* PERF: this could be faster, but do we care? */
+                for bit in 0..LfrBlock::BITS {
+                    word |= (bsol.get_aug_bit(bit as usize,aug) as LfrBlock) << bit;
+                }
+                core[blki*naug+aug] = word;
+            }
+        }
+
+        Some(MapCore{
+            bits_per_value: bits_per_value,
+            blocks: core,
+            nblocks: nblocks,
+            hash_key: *hash_key
+        })
     }
 
     /** Query this map at a given row */
@@ -718,7 +752,7 @@ fn next_power_of_2_ge(x:usize) -> usize {
     1 << (usize::BITS - (x-1).leading_zeros())
 }
 
-impl <K:Hash,V:Copy> CompressedRandomMap<K,V>
+impl <K:Hash+Sync,V:Copy> CompressedRandomMap<K,V>
 where Response:From<V> {
     /**
      * Build a uniform map.
@@ -734,7 +768,8 @@ where Response:From<V> {
      * even if they have the same u64 associated.
      */
     pub fn build<'a, Collection>(map: &'a Collection, options: &mut BuildOptions) -> Option<Self>
-    where for<'b> &'b Collection: IntoIterator<Item=(&'b K, &'b V)>,
+    where K:'a, V:'a,
+          for<'b> &'b Collection: IntoIterator<Item=(&'b K, &'b V)>,
           <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator,
     {
         /* Get the number of bits required */
@@ -749,16 +784,8 @@ where Response:From<V> {
 
         for try_num in options.try_num..options.max_tries {
             let hkey = choose_key(options.key_gen, try_num);
-            let iter1 = map.into_iter();
-            let nblocks = blocks_required(iter1.len());
-            let mut iter = iter1.map(|(k,v)| {
-                let mut row = hash_object_to_row(&hkey,nblocks,k);
-                row.augmented ^= Response::from(*v) >> options.shift;
-                row
-            });
-
-            /* Solve it! (with type-independent code) */
-            if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
+            let mut iter = map.into_iter();
+            if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey, options.shift) {
                 options.try_num = try_num;
                 return Some(Self {
                     core: solution,
@@ -791,7 +818,7 @@ where Response:From<V> {
     }
 }
 
-impl <K:Hash> ApproxSet<K> {
+impl <K:Hash+Sync> ApproxSet<K> {
     /** Default bits per value if none is specified. */
     const DEFAULT_BITS_PER_VALUE : u8 = 8;
 
@@ -825,11 +852,9 @@ impl <K:Hash> ApproxSet<K> {
         for try_num in options.try_num..options.max_tries {
             let hkey = choose_key(options.key_gen, try_num);
             let iter1 = set.into_iter();
-            let nblocks = blocks_required(iter1.len());
-            let mut iter = iter1.map(|k| hash_object_to_row(&hkey,nblocks,k) );
-
-            /* Solve it! (with type-independent code) */
-            if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
+            let zero = 0u64;
+            let mut iter = iter1.map(|k| (k,&zero) );
+            if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey, 0) {
                 options.try_num = try_num;
                 return Some(Self {
                     core: solution,

@@ -1,9 +1,10 @@
 
 # Rust port
 
+* Optimize threading
+* Make threading a feature
 * Use Borrow to make the code more generic?
 * Use outer struct with AsRef, and eliminate MapCore?
-* Use boxed slices instead of Vec?
 * Mark vectorized APIs as unsafe.
 * Clean up code TODOs
 * Rename functions for clarity
@@ -27,9 +28,6 @@ The Rust nonuniform map code is simpler and faster, so it is faster
 everywhere.
 
 Pseudoinverse is still unoptimized and should be improved.
-
-The Rust code is single-threaded, and should eventually be parallelized
-at least optionally.
     
 # For release
 

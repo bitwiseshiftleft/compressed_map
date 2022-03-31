@@ -137,7 +137,7 @@ pub struct CompressedMap<K,V> {
     _phantom: PhantomData<K>
 }
 
-impl <K:Hash+Eq,V:Hash+Ord+Clone> CompressedMap<K,V> {
+impl <K:Hash+Eq+Sync,V:Hash+Ord+Clone> CompressedMap<K,V> {
     /**
      * Build a nonuniform map.
      *
