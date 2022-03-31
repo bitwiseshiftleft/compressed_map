@@ -470,7 +470,9 @@ impl MapCore {
         
         /* Seed the items into the blocks.
          * PERF: not in parallel, because typically the cost of acquiring
-         * the mutexes exceeds the cost of hashing.
+         * the mutexes exceeds the cost of hashing.  But we could hash in
+         * parallel and then bucket on one thread?  Or write parallel bucket
+         * sort, heh.
          */
         let mut rowi=0;
         for row in iter {
