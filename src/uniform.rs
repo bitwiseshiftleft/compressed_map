@@ -169,20 +169,20 @@ impl<T> Channel<T> {
 
 /** A block or group of blocks for the hierarchical solver */
 struct BlockGroup {
-    fwd_solution:   Channel<(Matrix, Vec<RowIdx>)>, // with RowIdx::MAX appended for convenience
+    /* Forward solution; row IDs in solution; number of expected rows in reverse solution */
+    fwd_solution:   Channel<(Matrix, Vec<RowIdx>, usize)>, // with RowIdx::MAX appended for convenience
     bwd_solution:   Channel<Matrix>,
-    systematic:     Channel<Systematic>,
-    expected_load:  usize,
+    /* Systematic form of solution; number of expected rows in reverse solution for left side */
+    systematic:     Channel<(Systematic,usize)>,
     empty:          bool
 }
 
 impl BlockGroup {
-    fn new(empty:bool, load: usize) -> BlockGroup {
+    fn new(empty:bool) -> BlockGroup {
         BlockGroup {
             bwd_solution: Channel::new(),
             fwd_solution: Channel::new(),
             systematic:   Channel::new(),
-            expected_load: load,
             empty: empty
         }
     }
@@ -200,19 +200,19 @@ fn forward_solve(left:&mut BlockGroup, right:&mut BlockGroup, center: &mut Block
     if !center.fwd_solution.reserve() { return Some(()); }
     if right.empty {
         let tmp = left.fwd_solution.ctake();
-        let is_some = tmp.is_some();
+        let (is_some,load) = if let Some ((_,_,l)) = &tmp { (true,*l) } else { (false,0) };
         center.fwd_solution.write_maybe(tmp);
-        center.systematic.write(Systematic::identity(0));
+        center.systematic.write((Systematic::identity(0),load));
         center.empty = left.empty;
         return if is_some { Some(()) } else { None };
     }
 
-    let (lsol, lrow_ids) = if let Some(x) = left.fwd_solution.ctake() { x } else {
+    let (lsol, lrow_ids, lload) = if let Some(x) = left.fwd_solution.ctake() { x } else {
         center.systematic.expire();
         center.fwd_solution.expire();
         return None;
     };
-    let (rsol, rrow_ids) = if let Some(x) = right.fwd_solution.ctake() { x } else {
+    let (rsol, rrow_ids, _rload) = if let Some(x) = right.fwd_solution.ctake() { x } else {
         center.systematic.expire();
         center.fwd_solution.expire();
         return None;
@@ -260,10 +260,8 @@ fn forward_solve(left:&mut BlockGroup, right:&mut BlockGroup, center: &mut Block
         let lproj = systematic.project_out(&lkeep, true);
         let rproj = systematic.project_out(&rkeep, false);
         let interleaved = lproj.interleave_rows(&rproj, &interleave_left);
-
-        center.expected_load = systematic.rhs.cols_main;
-        center.fwd_solution.write((interleaved, row_ids));
-        center.systematic.write(systematic);
+        center.fwd_solution.write((interleaved, row_ids, systematic.rhs.cols_main));
+        center.systematic.write((systematic,lload));
         center.empty = false;
         Some(())
     } else {
@@ -286,9 +284,7 @@ fn backward_solve(center: &mut BlockGroup, left:&mut BlockGroup, right:&mut Bloc
         right.bwd_solution.expire();
         return None;
     };
-    let csys = if let Some(csys) = center.systematic.ctake() {
-        csys
-    } else {
+    let (csys,load) = if let Some(x) = center.systematic.ctake() { x } else {
         left.bwd_solution.expire();
         right.bwd_solution.expire();
         return None;
@@ -300,7 +296,7 @@ fn backward_solve(center: &mut BlockGroup, left:&mut BlockGroup, right:&mut Bloc
         left.bwd_solution.write(solution);
         right.bwd_solution.write(Matrix::new(0,0,0));
     } else {
-        let (lsol,rsol) = solution.split_at_row(left.expected_load);
+        let (lsol,rsol) = solution.split_at_row(load);
         left.bwd_solution.write(lsol);
         right.bwd_solution.write(rsol);
     }
@@ -433,9 +429,11 @@ impl MapCore {
 
         /* Initialize backward solution at random */
         if blocks[halfstride].bwd_solution.reserve() {
+            let (_,_,load) = blocks[halfstride].fwd_solution.ctake()?; // todo expire
             let mut seed = Matrix::new(0,0,naug);
+            seed.reserve_rows(load);
             let empty = [];
-            for row in 0..blocks[halfstride].expected_load {
+            for row in 0..load {
                 seed.mut_add_row_as_bytes(&empty, &MapCore::seed_row(hash_key, naug, row));
             }
             blocks[halfstride].bwd_solution.write(seed);
@@ -525,18 +523,18 @@ impl MapCore {
         /* Create the block groups from the blocks */
         let block_groups : Vec<BlockGroup> = (0..nblocks_po2*2).map(|i|
             if ((i&1) != 0) && i < 2*nblocks {
-                BlockGroup::new(false, LfrBlock::BITS as usize)
+                BlockGroup::new(false)
             } else {
-                BlockGroup::new(true,0)
+                BlockGroup::new(true)
             }
         ).collect();
 
         for (i,(blk,mut row_ids)) in blocks.into_iter().zip(row_ids.into_iter()).enumerate() {
             row_ids.push(RowIdx::MAX); /* Append guard rowidx */
-            block_groups[2*i+1].fwd_solution.write((blk,row_ids));
+            block_groups[2*i+1].fwd_solution.write((blk,row_ids,LfrBlock::BITS as usize));
         }
         for i in nblocks..nblocks_po2 {
-            block_groups[2*i+1].fwd_solution.write((Matrix::new(0,0,0),Vec::new()));
+            block_groups[2*i+1].fwd_solution.write((Matrix::new(0,0,0),Vec::new(),0));
         }
 
         /* Solve it */
