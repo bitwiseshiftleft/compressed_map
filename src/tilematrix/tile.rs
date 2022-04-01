@@ -475,8 +475,6 @@ impl Distribution<Tile> for Standard {
  * byte of the output depends on only one byte of the R.  For any given L,
  * this is a linear 8->8 function, which can be decomposed as two 4->8
  * on the nibbles.  These can be computed using two vector permute operations.
- * 
- * TODO: feature gate intrinsic versions
  **************************************************************************/
 mod scalar_core {
     use crate::tile::{Tile,Permutation,PERMUTE_ZERO,PERMUTE_ALL_ZERO,Index};
@@ -1000,5 +998,5 @@ mod tests {
         }
     }
 
-    /* TODO: test set row */
+    /* TEST: test set row */
 }

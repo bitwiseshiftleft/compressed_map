@@ -449,7 +449,6 @@ mod tests {
 
             let compressed_map = CompressedMap::build(&map, &mut options).unwrap();
 
-            /* FIXME! Sometimes this gives the wrong answer.  Why? */
             for (k,v) in map {
                 assert_eq!(compressed_map.query(&k), &v);
             }

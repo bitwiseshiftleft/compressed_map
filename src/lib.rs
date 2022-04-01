@@ -29,7 +29,8 @@
  * # Random compressed maps
  * 
  * A lower-level building block is [`CompressedRandomMap<K,V>`].  These work much
- * the same as `CompressedMap`s, but they return integer types such as `i8`.  They
+ * the same as `CompressedMap`s, but for `V` the support only `Into<u64>` types
+ * such as `i8`.  They
  * are efficient when the values are approximately uniformly random up to a certain
  * bit length (e.g., when they are random in `0..16`).  When queried with a key
  * that wasn't in the original map, they return an arbitrary value of the appropriate
@@ -90,10 +91,6 @@
  * around an order of magnitude less time and memory (not two orders of magnitude because the
  * values still need to be stored, queried etc).
  * 
- * TODO: building the maps can be multithreaded without too much difficulty.  It won't
- * parallelize perfectly unless the matrix solver can be parallelized as well, but it should
- * achieve a 2-4x speedup.
- * 
  * # Failure
  * 
  * Building a map is probabilistic, and will be retried a certain number of times before it
@@ -114,6 +111,15 @@
  *   has deterministic collisions for unequal keys.
  * * If you supply a key that's constructed non-randomly, if an attacker can predict it, then they
  *   can cause your map construction to repeatedly fail.
+ * * If threading is enabled, a thread running out of memory may be treated as a failure, causing
+ *   a slow and resource-intensive series of retries (TODO: support errors as well as options).
+ *
+ * # Threading
+ *
+ * With the `threading` feature enabled, building the core map objects can be multi-threaded.
+ * Currently not all steps are threaded, but a 2-3x speedup can be expected for large maps. 
+ * Smaller maps (< 100,000 entries) take longer to build with multi-threading because of the
+ * synchronization overhead.
  */
 
 

@@ -755,8 +755,6 @@ pub struct BuildOptions{
      * several [`CompressedRandomMap`]s capturing different
      * bits of the input, without rewriting a giant vector.
      * 
-     * TODO: maybe remove this and handle a different way?
-     * 
      * Default: 0.
      */
     pub shift: u8,
