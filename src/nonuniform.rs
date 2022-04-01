@@ -6,12 +6,13 @@
  * Nonuniform sparse linear map implementation.
  */
 
-use crate::uniform::{MapCore,CompressedRandomMap,LfrBlock,BuildOptions};
+use crate::uniform::{MapCore,CompressedRandomMap,LfrBlock,BuildOptions,HasherKey};
 use crate::tilematrix::bitset::{BitSet,BitSetIterator};
 use std::collections::HashMap;
 use core::marker::PhantomData;
 use std::hash::Hash;
 use std::cmp::{min,Ord,Ordering};
+use serde::{Serialize,Deserialize};
 
 type Locator = u32;
 type Plan = Locator;
@@ -129,6 +130,7 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
  * non-numeric types.
  */
 #[derive(Eq,PartialEq,Ord,PartialOrd,Clone,Debug)]
+#[serde(try_from="CompressedMapSer",into="CompressedMapSer")]
 pub struct CompressedMap<K,V> {
     plan: Plan,
     response_map: ResponseMap<V>,
@@ -379,6 +381,41 @@ impl <K:Hash+Eq+Sync,V:Hash+Ord+Clone> CompressedMap<K,V> {
             ret += ph.blocks.len();
         }
         (ret * LfrBlock::BITS as usize) / 8
+    }
+}
+
+
+/** Packed version for serialization */
+#[derive(Eq,Ord,PartialEq,PartialOrd,Debug,Serialize,Deserialize)]
+struct CompressedMapSer<V> {
+    hash_key: HasherKey,
+    plan: Plan,
+    log_responses: Vec<u8>,
+    salt: Vec<u8>,
+    responses: Vec<V>,
+    core: Vec<Vec<LfrBlock>>
+}
+
+impl <K,V> From<CompressedMap<K,V>> for CompressedMapSer<V> {
+    fn from(map: CompressedMap<K,V>) -> Self {
+        assert!(map.response_map.len() >= 1);
+        let log_responses = (&map.response_map).into_iter().map(|(loc,_v)| {
+            (loc.leading_zeros()+1) as u8
+        }).collect();
+        let responses = map.response_map.into_iter().map(|(_loc,v)| v).collect();
+        let hash_key = if map.core.len() == 0 {
+            [0u8;16]
+        } else {
+            map.core[0].hash_key
+        };
+        CompressedMapSer {
+            hash_key: hash_key,
+            plan: map.plan,
+            salt: map.salt,
+            log_responses: log_responses,
+            responses: responses,
+            core: map.core.into_iter().map(|umap| umap.blocks).collect()
+        }
     }
 }
 
