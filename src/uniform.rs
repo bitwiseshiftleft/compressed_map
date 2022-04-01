@@ -606,15 +606,21 @@ impl MapCore {
 }
 
 /**
- * Lower-level: compressed uniform static functions.
+ * Compressed uniform static functions.
  * 
- * These functions are a building block of the generic case.  They are
- * efficient when the value being mapped to is approximately uniformly
- * random from a power-of-2 interval, i.e. all values are about equally
- * likely.
+ * These objects work like [`CompressedMap`](crate::CompressedMap)s,
+ * but they do not support arbitrary values as objects and do not
+ * store their values.  Instead, they require the values to be integers
+ * (or other objects implementing [`Into<u64>`](std::convert::Into) and
+ * [`TryFrom<u64>`](std::convert::TryFrom)).
  * 
- * They don't store a table of `V`'s: instead they are limited to
- * returning numeric types of at most 64 bits.
+ * The design is efficient
+ * if these integers are approximately uniformly random up to some bit size,
+ * e.g. if they are random in `0..128`.  Unlike a [`CompressedMap`](crate::CompressedMap), a
+ * [`CompressedRandomMap`] cannot take advantage of any bias in the distribution
+ * of its values.
+ *
+ * [`CompressedRandomMap`] is building block for [`CompressedMap`](crate::CompressedMap).
  */
 #[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Serialize,Deserialize)]
 #[serde(try_from="MapCoreSer",into="MapCoreSer")]
@@ -647,14 +653,23 @@ impl <K,V> From<CompressedRandomMap<K,V>> for MapCoreSer {
 /**
  * Approximate sets.
  *
- * These are a possible replacement for Bloom filters in static contexts.
- * They store a compressed representation of a set of objects.  From that
+ * These are like [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter),
+ * except that are slower to construct, can't be modified once constructed,
+ * and use about 30% less space.
+ *
+ * They store a compressed representation of a set `S` of objects.  From that
  * representation you can query whether an object is in the set.
  * 
- * There is a small, adjustable false positive probability.  There are no
+ * There is a small, adjustable false positive probability, and no
  * false negatives.  That is, if you query an object that really was in the
  * set, you will always get `true`.  If you query an object not in the set,
- * you will usually get `false`, but not always.
+ * you will usually get `false`, but not always: there is a small false
+ * positive rate, according to the [`BuildOptions`].  There is a tradeoff:
+ * the smaller the false positive rate, the more space is used by the
+ * [`ApproxSet`].
+ *
+ * Internally, an [`ApproxSet`] is just a [`CompressedRandomMap`]
+ * which maps all the elements of the set to zero.
  */
 #[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Serialize,Deserialize)]
 #[serde(try_from="MapCoreSer",into="MapCoreSer")]
@@ -691,7 +706,7 @@ impl <K> From<ApproxSet<K>> for MapCoreSer {
  * Implements `Default`, so you can get reasonable options
  * with `BuildOptions::default()`.
  */
-#[derive(Copy,Clone,PartialEq,Eq,Debug,Ord,PartialOrd)]
+#[derive(Copy,Clone,PartialEq,Eq,Debug,Ord,PartialOrd,Serialize,Deserialize)]
 pub struct BuildOptions{
     /**
      * How many times to try building the set?
@@ -800,10 +815,11 @@ where Response:From<V> {
      * mapping, `query` will return the corresponding `v`.  If you query any `k`
      * not included in the original list, the return value will be arbitrary.
      *
-     * You can pass a `HashMap<K,V>`, `BTreeMap<K,V>` etc.  If you pass a
-     * non-mapping type such as `Vec<(K,V)>` then be careful: any duplicate
+     * You can pass a [`HashMap<K,V>`](std::collections::HashMap),
+     * [`BTreeMap<K,V>`](std::collections::BTreeMap) etc.  If you pass a
+     * non-mapping type then be careful: any duplicate
      * `K` entries will cause the build to fail, possibly after a long time,
-     * even if they have the same u64 associated.
+     * even if they have the same value associated.
      */
     pub fn build<'a, Collection>(map: &'a Collection, options: &mut BuildOptions) -> Option<Self>
     where &'a Collection: IntoIterator<Item=(&'a K, &'a V)>,
