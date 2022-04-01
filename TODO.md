@@ -13,6 +13,7 @@
 * File handling
 * (de)serialize CompressedMap
 * Make sure it builds with AVX2 when possible
+* Distinguish between "out of memory" and "matrix is not invertible"
 
 ## Rust performance:
 
@@ -45,6 +46,7 @@ Pseudoinverse is still unoptimized and should be improved.
 
 # Longer term
 
+* no_std core for embedded systems
 * Armv7 and x86 support
 * Better interface for tile matrices
 * Complete multi-threading

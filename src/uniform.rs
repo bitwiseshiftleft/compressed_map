@@ -951,8 +951,8 @@ mod tests {
         let mut map = HashMap::new();
         for i in 0u32..100 {
             let mut seed = [0u8;32];
-            let mut rng : StdRng = SeedableRng::from_seed(seed);
             seed[0..4].copy_from_slice(&i.to_le_bytes());
+            let mut rng : StdRng = SeedableRng::from_seed(seed);
             for _j in 0..99*((i+9)/10) {
                 map.insert(rng.gen::<u64>(), rng.gen::<u8>());
             }

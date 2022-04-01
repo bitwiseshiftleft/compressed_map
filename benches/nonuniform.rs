@@ -1,6 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use compressed_map::{CompressedMap,BuildOptions};
-use rand::{thread_rng,Rng};
+use rand::{Rng,SeedableRng};
+use rand::rngs::StdRng;
 use std::collections::HashMap;
 
 criterion_group!{
@@ -11,7 +12,10 @@ criterion_group!{
 fn criterion_benchmark(crit: &mut Criterion) {
     let no = 100000000;
     let yes  = 700000;
-    let mut rng = thread_rng();
+
+    let seed = [0u8;32];
+    let mut rng : StdRng = SeedableRng::from_seed(seed);
+
     let mut map = HashMap::new();
     for _ in 0..yes { map.insert(rng.gen::<u64>(), true); }
     for _ in 0..no { map.insert(rng.gen::<u64>(), false); }
@@ -21,6 +25,7 @@ fn criterion_benchmark(crit: &mut Criterion) {
     }
 
     let mut options = BuildOptions::default();
+    options.key_gen = Some(seed[..16].try_into().unwrap());
     let mut umap = None;
     crit.bench_function(&format!("nonu build {}+{}",yes,no),
     |crit| crit.iter(|| {

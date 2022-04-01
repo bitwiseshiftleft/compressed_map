@@ -1,6 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use compressed_map::{CompressedRandomMap,BuildOptions};
-use rand::{thread_rng,Rng};
+use rand::{Rng,SeedableRng};
+use rand::rngs::StdRng;
 use std::collections::HashMap;
 
 criterion_group!{
@@ -14,7 +15,9 @@ fn criterion_benchmark(crit: &mut Criterion) {
     let mask = if nbits == 64 { !0 } else { (1u64 << nbits) - 1 };
     for size in sizes {
         /* It's fine to use the same keys every time, due to the random hash key */
-        let mut rng = thread_rng();
+        let mut seed = [0u8;32];
+        seed[0..4].copy_from_slice(&(size as u32).to_le_bytes());
+        let mut rng : StdRng = SeedableRng::from_seed(seed);
         let keys   : Vec<u64> = (0..size).map(|_| rng.gen::<u64>()).collect();
         let values : Vec<u64> = (0..size).map(|_| rng.gen::<u64>() & mask).collect();
 
@@ -33,6 +36,7 @@ fn criterion_benchmark(crit: &mut Criterion) {
         let mut total_tries = 0;
         let mut total_builds = 0;
         let mut options = BuildOptions::default();
+        options.key_gen = Some(seed[..16].try_into().unwrap());
         crit.bench_function(&format!("uniform build {}",size),
             |crit| crit.iter(|| {
                 options.try_num = 0;
@@ -66,8 +70,11 @@ fn criterion_benchmark_slow(crit: &mut Criterion) {
     let nbits = 8;
     let mask = if nbits == 64 { !0 } else { (1u64 << nbits) - 1 };
     for size in sizes {
+        let mut seed = [0u8;32];
+        seed[0..4].copy_from_slice(&(size as u32).to_le_bytes());
+        let mut rng : StdRng = SeedableRng::from_seed(seed);
+
         /* It's fine to use the same keys every time, due to the random hash key */
-        let mut rng = thread_rng();
         let keys   : Vec<u64> = (0..size).map(|_| rng.gen::<u64>()).collect();
         let values : Vec<u64> = (0..size).map(|_| rng.gen::<u64>() & mask).collect();
 
@@ -82,6 +89,7 @@ fn criterion_benchmark_slow(crit: &mut Criterion) {
         let mut total_tries = 0;
         let mut total_builds = 0;
         let mut options = BuildOptions::default();
+        options.key_gen = Some(seed[..16].try_into().unwrap());
         crit.bench_function(&format!("uniform build {}",size),
             |crit| crit.iter(|| {
                 options.try_num = 0;
