@@ -13,12 +13,18 @@ use core::hash::Hash;
 use std::cmp::max;
 use rand::{RngCore};
 use rand::rngs::OsRng;
-use std::mem::replace;
 use siphasher::sip128::{Hasher128, SipHasher13, Hash128};
 use serde::{Serialize,Deserialize};
-use std::sync::{Arc,Mutex,Condvar};
-use std::thread::{spawn,available_parallelism,JoinHandle};
-use std::sync::atomic::{AtomicBool,Ordering};
+
+#[cfg(feature="threading")]
+use {
+    std::sync::{Arc,Mutex,Condvar},
+    std::thread::{spawn,available_parallelism,JoinHandle},
+    std::sync::atomic::{AtomicBool,Ordering},
+    std::mem::replace
+};
+#[cfg(not(feature="threading"))]
+use std::cell::RefCell;
 
 /** Space of responses in dictionary impl. */
 pub type Response = u64;
@@ -104,11 +110,13 @@ fn hash_object_to_row<K:Hash> (key: &HasherKey, nblocks:usize, k: &K)-> LfrRow {
     interpret_hash_as_row(h.finish128(), nblocks)
 }
 
+#[allow(dead_code)]
 enum ChannelResult<T> {
     Empty,
     Full(T),
     Expired
 }
+#[allow(unused_imports)]
 use ChannelResult::*;
 
 /**
@@ -117,12 +125,14 @@ use ChannelResult::*;
  * Each channel may be used only once.
  * The operation order is new() -> 
  */
+#[cfg(feature="threading")]
 struct Channel<T> {
     current: Mutex<ChannelResult<T>>,
     condvar: Condvar,
     available: AtomicBool
 }
 
+#[cfg(feature="threading")]
 impl<T> Channel<T> {
     fn new() -> Self {
         Channel {
@@ -160,6 +170,24 @@ impl<T> Channel<T> {
         self.available.swap(false,Ordering::Relaxed)
     }
 }
+
+/** Unthreaded version of a channel is much simpler */
+#[cfg(not(feature="threading"))]
+struct Channel<T> {
+    current: RefCell<Option<T>>
+}
+
+#[cfg(not(feature="threading"))]
+impl<T> Channel<T> {
+    fn new() -> Self { Channel { current: RefCell::new(None) }}
+    fn ctake(&self) -> Option<T> { self.current.replace(None) }
+    fn write(&self, t:T) -> Option<()> { *self.current.borrow_mut() = Some(t); Some(()) }
+    fn expire(&self) -> Option<()> { *self.current.borrow_mut() = None; Some(()) }
+    fn reserve(&self) -> bool { true }
+}
+
+
+
 
 /** A block or group of blocks for the hierarchical solver */
 struct BlockGroup {
@@ -439,7 +467,8 @@ impl MapCore {
     fn build_from_iter(
         iter: &mut dyn ExactSizeIterator<Item=LfrRow>,
         bits_per_value:u8,
-        hash_key:&HasherKey
+        hash_key:&HasherKey,
+        _max_threads: u8
     ) -> Option<MapCore> {
         if bits_per_value == 0 {
             /* force nblocks to 2 */
@@ -487,7 +516,8 @@ impl MapCore {
         }
         
         /* Create the block groups from the blocks */
-        let block_groups : Vec<BlockGroup> = (0..nblocks_po2*2).map(|_| BlockGroup::new()).collect();
+        #[allow(unused_mut)] /* used in the threading case */
+        let mut block_groups : Vec<BlockGroup> = (0..nblocks_po2*2).map(|_| BlockGroup::new()).collect();
 
         for (i,(blk,mut row_ids)) in blocks.into_iter().zip(row_ids.into_iter()).enumerate() {
             row_ids.push(RowIdx::MAX); /* Append guard rowidx */
@@ -499,23 +529,37 @@ impl MapCore {
 
         /* Solve it */
         let naug = bits_per_value as usize;
-        let parallelism = available_parallelism().map(|x| x.get()).unwrap_or(1);
-        let hash_key_lit = *hash_key;
-        let arc_block_groups = Arc::new(block_groups);
-        let joins : Vec<JoinHandle<Option<()>>> = (0..parallelism-1).map(|_| {
-            let arc_block_groups = Arc::clone(&arc_block_groups);
-            spawn(move || Self::build(arc_block_groups.as_ref(), naug, nblocks, hash_key_lit))
-        }).collect();
-        let result = Self::build(arc_block_groups.as_ref(), naug, nblocks, hash_key_lit);
-        for j in joins {
-            j.join().ok()??;
+
+        #[cfg(feature="threading")]
+        {
+            /* Threaded build */
+            let parallelism = if _max_threads > 0 {
+                _max_threads as usize
+            } else {
+                available_parallelism().map(|x| x.get()).unwrap_or(1)
+            };
+            let hash_key_lit = *hash_key;
+            let arc_block_groups = Arc::new(block_groups);
+            let joins : Vec<JoinHandle<Option<()>>> = (0..parallelism-1).map(|_| {
+                let arc_block_groups = Arc::clone(&arc_block_groups);
+                spawn(move || Self::build(arc_block_groups.as_ref(), naug, nblocks, hash_key_lit))
+            }).collect();
+            let result = Self::build(arc_block_groups.as_ref(), naug, nblocks, hash_key_lit);
+            for j in joins {
+                j.join().ok()??;
+            }
+            result?;
+            block_groups = Arc::try_unwrap(arc_block_groups).ok().unwrap();
         }
-        result?;
+        #[cfg(not(feature="threading"))]
+        {
+            Self::build(&block_groups, naug, nblocks, *hash_key)?;
+        }
 
         /* Serialize to core */
         let mut core = vec![0; naug*nblocks];
         for blki in 0..nblocks {
-            let bsol = arc_block_groups[2*blki+1].bwd_solution.ctake().unwrap();
+            let bsol = block_groups[2*blki+1].bwd_solution.ctake().unwrap();
             debug_assert_eq!(bsol.rows, BLOCKSIZE*8);
             for aug in 0..naug {
                 let mut word = 0;
@@ -715,7 +759,15 @@ pub struct BuildOptions{
      * 
      * Default: 0.
      */
-    pub shift: u8
+    pub shift: u8,
+
+    /**
+     * Maximum threads to use for building.  If 0, use
+     * available_parallelism().
+     * 
+     * Ignored if the threading feature isn't used.
+     */
+    pub max_threads: u8
 }
 
 impl Default for BuildOptions {
@@ -725,7 +777,8 @@ impl Default for BuildOptions {
             max_tries : 256,
             bits_per_value : None,
             try_num: 0,
-            shift: 0
+            shift: 0,
+            max_threads: 0
         }
     }
 }
@@ -752,7 +805,8 @@ where Response:From<V> {
      * even if they have the same u64 associated.
      */
     pub fn build<'a, Collection>(map: &'a Collection, options: &mut BuildOptions) -> Option<Self>
-    where for<'b> &'b Collection: IntoIterator<Item=(&'b K, &'b V)>,
+    where &'a Collection: IntoIterator<Item=(&'a K, &'a V)>,
+          K:'a, V:'a,
           <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator,
     {
         /* Get the number of bits required */
@@ -776,7 +830,12 @@ where Response:From<V> {
             });
 
             /* Solve it! (with type-independent code) */
-            if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
+            if let Some(solution) = MapCore::build_from_iter(
+                &mut iter,
+                bits_per_value,
+                &hkey,
+                options.max_threads
+            ) {
                 options.try_num = try_num;
                 return Some(Self {
                     core: solution,
@@ -831,7 +890,8 @@ impl <K:Hash> ApproxSet<K> {
      * to fail, possibly after a long time.
      */
     pub fn build<'a, Collection>(set: &'a Collection, options: &mut BuildOptions) -> Option<Self>
-    where for<'b> &'b Collection: IntoIterator<Item=&'b K>,
+    where &'a Collection: IntoIterator<Item=&'a K>,
+          K: 'a,
           <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator
     {
         /* Choose the number of bits required */
@@ -847,7 +907,12 @@ impl <K:Hash> ApproxSet<K> {
             let mut iter = iter1.map(|k| hash_object_to_row(&hkey,nblocks,k) );
 
             /* Solve it! (with type-independent code) */
-            if let Some(solution) = MapCore::build_from_iter(&mut iter, bits_per_value, &hkey) {
+            if let Some(solution) = MapCore::build_from_iter(
+                &mut iter,
+                bits_per_value,
+                &hkey,
+                options.max_threads
+            ) {
                 options.try_num = try_num;
                 return Some(Self {
                     core: solution,

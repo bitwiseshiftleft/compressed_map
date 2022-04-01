@@ -3,9 +3,11 @@ name = "compressed_map"
 version = "0.1.0"
 edition = "2021"
 
-# TODO: pin hashes
+[features]
+threading = []
 
 [dependencies]
+# TODO: pin hashes
 serde = { version = "1.0", features = ["derive"] }
 siphasher = "0.3"
 rand = "0.8.5"

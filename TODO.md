@@ -1,7 +1,6 @@
 
 # Rust port
 
-* Make threading a feature
 * Use Borrow to make the code more generic?
 * Use outer struct with AsRef, and eliminate MapCore?
 * Mark vectorized APIs as unsafe.

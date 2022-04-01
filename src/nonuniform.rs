@@ -282,7 +282,8 @@ impl <K:Hash+Eq+Sync,V:Hash+Ord+Clone> CompressedMap<K,V> {
                 try_num: 0,
                 key_gen: parent_key,
                 bits_per_value: Some(phase_nbits as u8),
-                shift: phase_shift as u8
+                shift: phase_shift as u8,
+                max_threads: options.max_threads
             };
 
             /* Set the values we care about */
