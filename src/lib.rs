@@ -2,8 +2,8 @@
  * Compressed mapping objects.
  * 
  * This crate provides a [`CompressedMap<K, V>`] object, which operates
- * somewhat like an immutable [`HashMap`](std::collections::hash_map::HashMap)
- * from keys of type `K` to values of type `V`.  However, it has a significant
+ * somewhat like an immutable [`HashMap<K,V>`](std::collections::hash_map::HashMap):
+ * it maps keys of type `K` to values of type `V`.  However, it has a significant
  * and intentional limitation: it does not store the keys to the map.  This
  * provides better compression, but limits the use cases.
  * 
@@ -17,7 +17,7 @@
  * be returned.  But if `key` was not in `map`, then the CompressedMap has no
  * way to detect this, because it has discarded the keys.  It will instead return
  * some value that was in the map, arbitrarily.  (As a result, you cannot
- * construct a `CompressedMap` from an empty map.)
+ * construct a [`CompressedMap`] from an empty map.)
  * 
  * This compressed map implementation is most efficient for maps containing
  * hundreds to hundred-millions of keys, but only a few values.  The motivating
