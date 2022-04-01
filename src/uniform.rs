@@ -750,9 +750,9 @@ pub struct BuildOptions{
 
     /**
      * Override the number of bits to return per value.
-     * If given, all values will be truncated to that many
-     * least-significant bits.  If omitted, the bit length
-     * of the largest input value will be used.
+     * If given for a [`CompressedRandomMap`], all values
+     * will be truncated to that many least-significant bits.
+     * If omitted, the bit length of the largest input value will be used.
      * 
      * When building an [`ApproxSet`], this determines the failure
      * probability (which is 2<sup>-`bits_per_value`</sup>) and

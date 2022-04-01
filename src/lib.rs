@@ -12,7 +12,8 @@
  * # Compressed maps
  * 
  * Compressed maps can be constructed from a standard map `map` of one of the
- * usual mapping types such as `HashMap<K,V>` or `BTreeMap<K,V>`.  On lookup
+ * usual mapping types such as [`HashMap<K,V>`](std::collections::HashMap) or
+ * [`BTreeMap<K,V>`](std::collections::BTreeMap).  On lookup
  * of a `key` in the [`CompressedMap`], if `map[key] = value`, then `value` will
  * be returned.  But if `key` was not in `map`, then the CompressedMap has no
  * way to detect this, because it has discarded the keys.  It will instead return
@@ -23,20 +24,21 @@
  * hundreds to hundred-millions of keys, but only a few values.  The motivating
  * example is certificate revocation, à la
  * [CRLite](https://blog.mozilla.org/security/2020/01/09/crlite-part-2-end-to-end-design/).
- * In this example, a `CompressedMap<Certificate,bool>` could represent which
+ * In this example, a [`CompressedMap`]`<Certificate,bool>` could represent which
  * certificates are revoked and which are still valid.
  * 
- * # Random compressed maps
+ * ## Random compressed maps
  * 
  * A lower-level building block is [`CompressedRandomMap<K,V>`].  These work much
- * the same as `CompressedMap`s, but for `V` the support only `Into<u64>` types
- * such as `i8`.  They
+ * the same as `CompressedMap`s, but for `V` the support only values `V` which are
+ * integers, or otherwise [`Into<u64>`](std::convert::Into) and
+ * [`TryFrom<u64>`](std::convert::TryFrom).  They
  * are efficient when the values are approximately uniformly random up to a certain
  * bit length (e.g., when they are random in `0..16`).  When queried with a key
  * that wasn't in the original map, they return an arbitrary value of the appropriate
  * bit length --- not necessarily one of the original keys.
  * 
- * # Approximate sets
+ * ## Approximate sets
  * 
  * These [`ApproxSet`]s operate much like static [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter).
  * They are constructed from a set `set`, e.g. a [`HashSet`](std::collections::hash_set::HashSet).
@@ -45,7 +47,8 @@
  * `false`, but there is a false positive probability.  By default this is 2<sup>-8</sup>, but
  * you can control it using the `bits_per_value` field in [`BuildOptions`].
  * 
- * # Space usage
+ * # Performance
+ * ## Space usage
  * 
  * [`ApproxSet`] and [`CompressedRandomMap`] use approximately `bits_per_value` bits per entry
  * in the map.  By default, this is 8 bits for [`ApproxSet`], and the maximum bit-length of
@@ -64,8 +67,8 @@
  * 
  * All of these structures have small constant or nearly-constant overheads as well --
  * for example, they contain lengths, hash keys and padding.
- * 
- * # Performance
+ *
+ * ## Time and memory
  * 
  * Querying any of these maps or sets is very fast, typically around 100-200 cycles
  * if the map is in cache.  The process typically uses 2 sequential groups of memory
@@ -90,6 +93,13 @@
  * So for example, if 99% of the values are `false` and 1% are `true`, then building a map takes
  * around an order of magnitude less time and memory (not two orders of magnitude because the
  * values still need to be stored, queried etc).
+ *
+ * ## Threading
+ *
+ * With the `threading` feature enabled, building the core map objects can be multi-threaded.
+ * Currently not all steps are threaded, but a 2-3x speedup can be expected for large maps. 
+ * Smaller maps (< 100,000 entries) take longer to build with multi-threading because of the
+ * synchronization overhead.
  * 
  * # Failure
  * 
@@ -113,13 +123,6 @@
  *   can cause your map construction to repeatedly fail.
  * * If threading is enabled, a thread running out of memory may be treated as a failure, causing
  *   a slow and resource-intensive series of retries (TODO: support errors as well as options).
- *
- * # Threading
- *
- * With the `threading` feature enabled, building the core map objects can be multi-threaded.
- * Currently not all steps are threaded, but a 2-3x speedup can be expected for large maps. 
- * Smaller maps (< 100,000 entries) take longer to build with multi-threading because of the
- * synchronization overhead.
  *
  * # Serialization
  *
