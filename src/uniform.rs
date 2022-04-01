@@ -350,12 +350,15 @@ pub(crate) fn choose_key(base_key: Option<HasherKey>, n:usize) -> HasherKey {
     }
 }
 
-/** Form of MapCore with validation and smaller serialization */
+/**
+ * Form of MapCore with validation and smaller serialization
+ * Also used to serialize CompressedMap
+ */
 #[derive(Serialize,Deserialize)]
-struct MapCoreSer {
-    hash_key: HasherKey,
-    bits_per_value: u8,
-    blocks: Vec<LfrBlock>,
+pub(crate) struct MapCoreSer {
+    pub(crate) hash_key: HasherKey,
+    pub(crate) bits_per_value: u8,
+    pub(crate) blocks: Vec<LfrBlock>,
 }
 
 /** Untyped core of a mapping object. */
@@ -941,17 +944,17 @@ mod tests {
     use rand::{thread_rng,Rng,SeedableRng};
     use rand::rngs::StdRng;
     use std::collections::{HashMap,HashSet};
-    // use serde::{Serialize,Deserialize};
+    use serde_json::{from_str, to_string};
 
     /* Test map functionality */
     #[test]
     fn test_uniform_map() {
         let mut map = HashMap::new();
-        for i in 0u32..100 {
+        for i in 0u32..10 {
             let mut seed = [0u8;32];
             seed[0..4].copy_from_slice(&i.to_le_bytes());
             let mut rng : StdRng = SeedableRng::from_seed(seed);
-            for _j in 0..99*((i+9)/10) {
+            for _j in 0..99*(i) {
                 map.insert(rng.gen::<u64>(), rng.gen::<u8>());
             }
             let mut options = BuildOptions::default();
@@ -962,10 +965,12 @@ mod tests {
                 assert_eq!(hiermap.try_query(&k), Some(*v));
             }
 
-            // let ser = hiermap.serialize();
-            // let deser = CompressedRandomMap::<u64,u8>::deserialize(&ser);
-            // assert!(deser.is_some());
-            // assert_eq!(hiermap, deser.unwrap()); 
+            let ser = to_string(&hiermap);
+            assert!(ser.is_ok());
+            let ser = ser.unwrap();
+            let deser = from_str(&ser);
+            assert!(deser.is_ok());
+            assert_eq!(hiermap, deser.unwrap()); 
         }
     }
 
@@ -979,24 +984,30 @@ mod tests {
                 set.insert(rng.gen::<u64>());
             }
             
-            let hiermap = ApproxSet::build(&set, &mut BuildOptions::default()).unwrap();
+            let approxset = ApproxSet::build(&set, &mut BuildOptions::default()).unwrap();
             for k in set.iter() {
-                assert_eq!(hiermap.probably_contains(&k), true);
+                assert_eq!(approxset.probably_contains(&k), true);
             }
 
             let mut false_positives = 0;
             let ntries = 10000;
-            let mu = ntries as f64 / 2f64.powf(hiermap.core.bits_per_value as f64);
+            let mu = ntries as f64 / 2f64.powf(approxset.core.bits_per_value as f64);
             for _ in 0..ntries {
-                false_positives += hiermap.probably_contains(&rng.gen::<u64>()) as usize;
+                false_positives += approxset.probably_contains(&rng.gen::<u64>()) as usize;
             }
             // println!("{} false positives", false_positives);
             assert!((false_positives as f64) < mu + 4.*mu.sqrt());
 
-            // let ser = hiermap.serialize();
+            // let ser = approxset.serialize();
             // let deser = ApproxSet::<u64>::deserialize(&ser);
             // assert!(deser.is_some());
-            // assert_eq!(hiermap, deser.unwrap()); 
+            // assert_eq!(approxset, deser.unwrap()); 
+            let ser = to_string(&approxset);
+            assert!(ser.is_ok());
+            let ser = ser.unwrap();
+            let deser = from_str(&ser);
+            assert!(deser.is_ok());
+            assert_eq!(approxset, deser.unwrap()); 
         }
     }
 }

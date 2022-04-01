@@ -8,7 +8,6 @@
 * Demo app
 * Examples in doc
 * File handling
-* (de)serialize CompressedMap
 * Make sure it builds with AVX2 when possible
 * Distinguish between "out of memory" and "matrix is not invertible"
 * Deal with overflow cases with billions of items in nonuniform maps.
