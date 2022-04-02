@@ -1,18 +1,17 @@
 # Ser/deser
 
-* Add a version number to bincode deser
-* Check that bincode deser looks sane
-* Replace the length check with just encoding
-* Improve vector alignment in CompressedMap encode/decode.
+* Add a version number to bincode code
+* Check that bincode code looks sane
+* Borrowing decode
 * Stabilize interface and format
 
 # Other release items
 
-* Use outer struct with AsRef, and eliminate MapCore?  Enable mmap in this way??
+* Convenience methods, at least, for file handling
+* Enable mmap?
 * C / C++ interface / dynamic lib
 * Demo app
 * Examples in doc
-* Convenience methods, at least, for file handling
 * Make sure it builds automatically with AVX2 when possible
 * Distinguish between "out of memory", "can't create thread" etc, and "matrix is not invertible"
 * Deal with overflow cases with billions of items in nonuniform maps, where 0 rounds up to 1.

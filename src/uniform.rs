@@ -8,9 +8,9 @@
 
 use crate::tilematrix::matrix::{Matrix,Systematic};
 use crate::tilematrix::bitset::BitSet;
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 use core::hash::Hash;
-use std::cmp::max;
+use core::cmp::max;
 use rand::{RngCore};
 use rand::rngs::OsRng;
 use siphasher::sip128::{Hasher128, SipHasher13, Hash128};
@@ -19,7 +19,8 @@ use bincode::{Encode,Decode};
 use bincode::enc::{Encoder};
 use bincode::de::{Decoder};
 use bincode::error::{EncodeError,DecodeError};
-
+use bincode::enc::write::Writer;
+use bincode::de::read::Reader;
 
 #[cfg(feature="threading")]
 use {
@@ -28,8 +29,11 @@ use {
     std::sync::atomic::{AtomicBool,Ordering},
     std::mem::replace
 };
+
 #[cfg(not(feature="threading"))]
-use std::cell::RefCell;
+use core::cell::RefCell;
+
+use std::borrow::Cow;
 
 /** Space of responses in dictionary impl. */
 pub type Response = u64;
@@ -354,7 +358,7 @@ pub(crate) fn choose_key(base_key: Option<HasherKey>, n:usize) -> HasherKey {
 
 /** Untyped core of a mapping object. */
 #[derive(Eq,PartialEq,Ord,PartialOrd,Clone,Debug)]
-pub(crate) struct MapCore {
+pub(crate) struct MapCore<'a> {
     /** The SipHash key used to hash inputs. */
     pub(crate) hash_key: HasherKey,
 
@@ -365,55 +369,44 @@ pub(crate) struct MapCore {
     pub nblocks: usize,
 
     /** The block data itself */
-    pub(crate) blocks: Vec<u8>,
+    pub(crate) blocks: Cow<'a, [u8]>,
 }
 
-/** Decoding steps to figure out nblocks */
-pub(crate) fn decode_map_core(
-    hash_key: HasherKey,
-    bits_per_value: u8,
-    blocks: Vec<u8>
-) -> Result<MapCore, &'static str> {
-    let nblocks = if bits_per_value == 0 {
-        if blocks.len() != 0 { return Err("can't have blocks if bits_per_value==0"); }
-        2
-    } else if bits_per_value > Response::BITS as u8 {
-        return Err("can't have have more than Response::BITS per value");
-    } else if blocks.len() % (BLOCKSIZE * bits_per_value as usize) as usize != 0 {
-        return Err("bits_per_value must evenly divide blocks.len()");
-    } else {
-        blocks.len() / (BLOCKSIZE * bits_per_value as usize) as usize
-    };
-    if nblocks < 2 {
-        Err("must have nblocks >= 2")
-    } else {
-        Ok(MapCore{
+impl <'a> Encode for MapCore<'a> {
+    fn encode<'b,E: Encoder>(&'b self, encoder: &mut E) -> Result<(), EncodeError> {
+        Encode::encode(&self.hash_key, encoder)?;
+        Encode::encode(&self.bits_per_value, encoder)?;
+        Encode::encode(&self.nblocks, encoder)?;
+        encoder.writer().write(&self.blocks.as_ref())
+    }
+}
+
+impl <'a> Decode for MapCore<'a> {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let hash_key       = Decode::decode(decoder)?;
+        let bits_per_value = Decode::decode(decoder)?;
+        let nblocks : usize = Decode::decode(decoder)?;
+        if nblocks < 2 {
+            return Err(DecodeError::OtherString("bits_per_value must be at least 2".to_string()));
+        } else if bits_per_value == 0 && nblocks != 2 {
+            return Err(DecodeError::OtherString("bits_per_value must be exactly 2 for trivial map".to_string()));
+        }
+        let mul1 : usize = nblocks.checked_mul(BLOCKSIZE)
+            .ok_or(DecodeError::OtherString("overflow on multiply".to_string()))?;
+        let mul2 : usize = mul1.checked_mul(bits_per_value as usize)
+            .ok_or(DecodeError::OtherString("overflow on multiply".to_string()))?;
+        let mut blocks = vec![0u8;mul2];
+        decoder.reader().read(&mut blocks)?;
+        Ok(MapCore {
             hash_key: hash_key,
             bits_per_value: bits_per_value,
-            blocks: blocks,
+            blocks: Cow::Owned(blocks),
             nblocks: nblocks
         })
     }
 }
 
-impl Encode for MapCore {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        Encode::encode(&self.hash_key, encoder)?;
-        Encode::encode(&self.bits_per_value, encoder)?;
-        Encode::encode(&self.blocks, encoder)
-    }
-}
-
-impl Decode for MapCore {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let hash_key       = Decode::decode(decoder)?;
-        let bits_per_value = Decode::decode(decoder)?;
-        let blocks         = Decode::decode(decoder)?;
-        decode_map_core(hash_key, bits_per_value, blocks).map_err(|e| DecodeError::OtherString(e.to_string()))
-    }
-}
-
-impl MapCore {
+impl <'a> MapCore<'a> {
     /** Deterministically choose a seed for the given row's output */
     fn seed_row(hash_key: &HasherKey, naug: usize, row:usize) -> [u8; 8] {
         let mut h = LfrHasher::new_with_key(hash_key);
@@ -471,14 +464,14 @@ impl MapCore {
         bits_per_value:u8,
         hash_key:&HasherKey,
         _max_threads: u8
-    ) -> Option<MapCore> {
+    ) -> Option<MapCore<'a>> {
         if bits_per_value == 0 {
             /* force nblocks to 2 */
             return Some(MapCore{
                 hash_key: *hash_key,
                 bits_per_value: bits_per_value,
                 nblocks: 2,
-                blocks: vec![],
+                blocks: Cow::Owned(Vec::new()),
             });
         }
 
@@ -577,7 +570,7 @@ impl MapCore {
 
         Some(MapCore{
             bits_per_value: bits_per_value,
-            blocks: core,
+            blocks: Cow::Owned(core),
             nblocks: nblocks,
             hash_key: *hash_key
         })
@@ -626,17 +619,21 @@ impl MapCore {
  * of its values.
  *
  * [`CompressedRandomMap`] is building block for [`CompressedMap`](crate::CompressedMap).
+ *
+ * [`CompressedRandomMap`] doesn't implement [`Index`](core::ops::Index),
+ * because it doesn't actually hold its values, so it can't return references
+ * to them.
  */
 #[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Encode,Decode)]
-pub struct CompressedRandomMap<K,V> {
+pub struct CompressedRandomMap<'a,K,V> {
     /** Untyped map object, consulted after hashing. */
-    pub(crate) core: MapCore,
+    pub(crate) core: MapCore<'a>,
 
     /** Phantom to hold the types of K,V */
     _phantom: PhantomData<(K,V)>
 }
 
-impl <K,V> Clone for CompressedRandomMap<K,V> {
+impl <'a,K,V> Clone for CompressedRandomMap<'a,K,V> {
     fn clone(&self) -> Self {
         CompressedRandomMap { core: self.core.clone(), _phantom:PhantomData::default() }
     }
@@ -664,15 +661,15 @@ impl <K,V> Clone for CompressedRandomMap<K,V> {
  * which maps all the elements of the set to zero.
  */
 #[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Encode,Decode)]
-pub struct ApproxSet<K> {
+pub struct ApproxSet<'a,K> {
     /** Untyped map object, consulted after hashing. */
-    core: MapCore,
+    core: MapCore<'a>,
 
     /** Phantom to hold the type of K */
     _phantom: PhantomData<K>,
 }
 
-impl <K> Clone for ApproxSet<K> {
+impl <'a,K> Clone for ApproxSet<'a,K> {
     fn clone(&self) -> Self {
         ApproxSet { core: self.core.clone(), _phantom:PhantomData::default() }
     }
@@ -784,7 +781,7 @@ fn next_power_of_2_ge(x:usize) -> usize {
     1 << (usize::BITS - (x-1).leading_zeros())
 }
 
-impl <K:Hash,V:Copy> CompressedRandomMap<K,V>
+impl <'a,K:Hash,V:Copy> CompressedRandomMap<'a,K,V>
 where Response:From<V> {
     /**
      * Build a uniform map.
@@ -800,10 +797,10 @@ where Response:From<V> {
      * `K` entries will cause the build to fail, possibly after a long time,
      * even if they have the same value associated.
      */
-    pub fn build<'a, Collection>(map: &'a Collection, options: &mut BuildOptions) -> Option<Self>
-    where &'a Collection: IntoIterator<Item=(&'a K, &'a V)>,
-          K:'a, V:'a,
-          <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator,
+    pub fn build<'b, Collection>(map: &'b Collection, options: &mut BuildOptions) -> Option<Self>
+    where &'b Collection: IntoIterator<Item=(&'b K, &'b V)>,
+          K:'b, V:'b,
+          <&'b Collection as IntoIterator>::IntoIter : ExactSizeIterator,
     {
         /* Get the number of bits required */
         let bits_per_value = match options.bits_per_value {
@@ -866,7 +863,7 @@ where Response:From<V> {
     }
 }
 
-impl <K:Hash> ApproxSet<K> {
+impl <'a,K:Hash> ApproxSet<'a,K> {
     /** Default bits per value if none is specified. */
     const DEFAULT_BITS_PER_VALUE : u8 = 8;
 
@@ -887,10 +884,10 @@ impl <K:Hash> ApproxSet<K> {
      * type then be careful: any duplicate `K` entries will cause the build
      * to fail, possibly after a long time.
      */
-    pub fn build<'a, Collection>(set: &'a Collection, options: &mut BuildOptions) -> Option<Self>
-    where &'a Collection: IntoIterator<Item=&'a K>,
-          K: 'a,
-          <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator
+    pub fn build<'b, Collection>(set: &'b Collection, options: &mut BuildOptions) -> Option<Self>
+    where &'b Collection: IntoIterator<Item=&'b K>,
+          K: 'b,
+          <&'b Collection as IntoIterator>::IntoIter : ExactSizeIterator
     {
         /* Choose the number of bits required */
         let bits_per_value = match options.bits_per_value {

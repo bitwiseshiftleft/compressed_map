@@ -6,17 +6,23 @@
  * Nonuniform sparse linear map implementation.
  */
 
-use crate::uniform::{MapCore,CompressedRandomMap,BuildOptions,choose_key,decode_map_core};
+use crate::uniform::{MapCore,CompressedRandomMap,BuildOptions,
+    choose_key,BLOCKSIZE};
 use crate::tilematrix::bitset::{BitSet,BitSetIterator};
 use std::collections::HashMap;
 use core::marker::PhantomData;
-use std::hash::Hash;
-use std::cmp::{min,Ord,Ordering};
+use core::hash::Hash;
+use core::cmp::{min,max,Ord,Ordering};
+use core::ops::Index;
 
 use bincode::{Encode,Decode};
 use bincode::enc::{Encoder};
 use bincode::de::{Decoder};
+use bincode::de::read::Reader;
 use bincode::error::{EncodeError,DecodeError};
+use bincode::enc::write::Writer;
+
+use std::borrow::Cow;
 
 type Locator = u32;
 type Plan = Locator;
@@ -137,6 +143,9 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
  * returned.  As a result, [`CompressedMap`]s can't be constructed from an empty
  * map.
  *
+ * [`CompressedMap`] implements [`Index`](core::ops::Index), so you can use
+ * `map[k]` notation.
+ *
  * These maps are optimized for the case when there are only a few different
  * values, but millions of keys.
  *
@@ -145,15 +154,15 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
  * the values themselves.
  */
 #[derive(Eq,PartialEq,Ord,PartialOrd,Debug)]
-pub struct CompressedMap<K,V> {
+pub struct CompressedMap<'a,K,V> {
     plan: Plan,
     response_map: ResponseMap<V>,
     salt: Vec<u8>,
-    core: Vec<MapCore>,
+    core: Vec<MapCore<'a>>,
     _phantom: PhantomData<K>
 }
 
-impl <K,V> Clone for CompressedMap<K,V> where V:Clone {
+impl <'a,K,V> Clone for CompressedMap<'a,K,V> where V:Clone {
     fn clone(&self) -> Self {
         CompressedMap{
             plan:self.plan,
@@ -165,7 +174,7 @@ impl <K,V> Clone for CompressedMap<K,V> where V:Clone {
     }
 }
 
-impl <K:Hash+Eq+Sync,V:Hash+Ord+Clone> CompressedMap<K,V> {
+impl <'a,K:Hash,V> CompressedMap<'a,K,V> {
     /**
      * Build a nonuniform map.
      *
@@ -183,9 +192,10 @@ impl <K:Hash+Eq+Sync,V:Hash+Ord+Clone> CompressedMap<K,V> {
      *
      * Ignores the BuildOptions' shift and bits_per_value.
      */
-    pub fn build<'a, Collection>(map: &'a Collection, options: &mut BuildOptions) -> Option<CompressedMap<K,V>>
-    where for<'b> &'b Collection: IntoIterator<Item=(&'b K, &'b V)>,
-          <&'a Collection as IntoIterator>::IntoIter : ExactSizeIterator
+    pub fn build<'b, Collection>(map: &'b Collection, options: &mut BuildOptions) -> Option<Self>
+    where &'b Collection: IntoIterator<Item=(&'b K, &'b V)>,
+          K: 'b, V: 'b+Hash+Ord+Clone,
+          <&'b Collection as IntoIterator>::IntoIter : ExactSizeIterator
     {
         /* Count the items and formulate a plan */
         let mut counts = HashMap::new();
@@ -351,7 +361,7 @@ impl <K:Hash+Eq+Sync,V:Hash+Ord+Clone> CompressedMap<K,V> {
         })
     }
 
-    fn bsearch<'a>(&'a self, low: Locator, high: Locator) -> Option<&'a V> {
+    fn bsearch<'b>(&'b self, low: Locator, high: Locator) -> Option<&'b V> {
         let plow  = self.response_map.partition_point(|(begin,_v)| *begin <= low) - 1;
         if (plow == self.response_map.len() - 1)
             || (self.response_map[plow+1].0 > high) {
@@ -361,7 +371,7 @@ impl <K:Hash+Eq+Sync,V:Hash+Ord+Clone> CompressedMap<K,V> {
         }
     }
 
-    pub fn query<'a>(&'a self, key:&K) -> &'a V {
+    pub fn query<'b>(&'b self, key:&K) -> &'b V {
         let nphases = self.core.len();
         let mut locator = 0 as Locator;
         let mut plan = self.plan;
@@ -401,8 +411,7 @@ impl <K:Hash+Eq+Sync,V:Hash+Ord+Clone> CompressedMap<K,V> {
     }
 }
 
-/* TODO: shouldn't need clone for this */
-impl <K,V> Encode for CompressedMap<K,V> where V: Encode+Clone {
+impl <'a,K,V> Encode for CompressedMap<'a,K,V> where V: Encode {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
         assert!(self.response_map.len() >= 1);
         let mut log_responses = Vec::with_capacity(self.response_map.len()-1);
@@ -416,47 +425,38 @@ impl <K,V> Encode for CompressedMap<K,V> where V: Encode+Clone {
             self.core[0].hash_key
         };
 
-        /* TODO: don't clone */
-        let core : Vec<Vec<u8>> = self.core.clone().into_iter().map(|umap| umap.blocks).collect();
-
         /* TODO: before we standardize the file format */
-        Encode::encode(&hash_key, encoder)?;
-        Encode::encode(&self.plan, encoder)?;
-        Encode::encode(&self.salt, encoder)?;
         Encode::encode(&log_responses, encoder)?;
         for (_l,v) in &self.response_map {
             Encode::encode(v, encoder)?;
         }
-        /* FIXME: concat and realign this, so that all data goes together */
-        Encode::encode(&core, encoder)
+
+        Encode::encode(&hash_key, encoder)?;
+        Encode::encode(&self.plan, encoder)?;
+        encoder.writer().write(&self.salt)?;
+        for core in &self.core {
+            Encode::encode(&core.nblocks,encoder)?;
+        }
+        for core in &self.core {
+            encoder.writer().write(&core.blocks.as_ref())?;
+        }
+        Ok(())
     }
 }
 
-impl <K,V> Decode for CompressedMap<K,V> where V: Decode {
+impl <'a,K,V> Decode for CompressedMap<'a,K,V> where V: Decode {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
-        /* Decode from the stream */
-        let hash_key = Decode::decode(decoder)?;
-        let plan : Locator = Decode::decode(decoder)?;
-        let salt : Vec<u8> = Decode::decode(decoder)?;
+        /* First: log_responses and responses */
         let log_responses : Vec<u8> = Decode::decode(decoder)?;
         let mut responses : Vec<V> = Vec::with_capacity(log_responses.len()+1);
         for _ in 0..log_responses.len()+1 {
             responses.push(Decode::decode(decoder)?);
         }
-        let dec_core : Vec<Vec<u8>> = Decode::decode(decoder)?;
 
+        /* Decode the response map */
         fn err<Nope>(descr: &'static str) -> Result<Nope, DecodeError> {
             Err(DecodeError::OtherString(descr.to_string()))
         }
-
-        /* Sanity check */
-        let nphases = plan.count_ones() as usize;
-        if nphases > 0 && (nphases != salt.len()+1) { return err("salt has the wrong length"); }
-        if nphases != dec_core.len()   { return err("core has the wrong length"); }
-        if responses.len() != log_responses.len() + 1 {
-            return err("responses len doesn't match log responses+1");
-        }
-
         let mut response_map = Vec::with_capacity(responses.len());
         let mut total : Locator = 0;
         for (i,response) in responses.into_iter().enumerate() {
@@ -474,25 +474,55 @@ impl <K,V> Decode for CompressedMap<K,V> where V: Decode {
             }
         }
 
-        /* Make maps for the phases */
-        let mut core : Vec<MapCore> = Vec::with_capacity(dec_core.len());
+
+        /* Hash_key and plan */
+        let hash_key = Decode::decode(decoder)?;
+        let plan : Locator = Decode::decode(decoder)?;
+        let nphases = plan.count_ones() as usize;
+        
+        /* Salt and nblocks per phase */
+        let len_salt = max(1,nphases)-1;
+        let mut salt = vec![0u8;len_salt];
+        decoder.reader().read(&mut salt)?;
+        let mut nblocks_per_phase : Vec<usize> = Vec::with_capacity(nphases);
+        for _phase in 0..nphases {
+            let nblocks = Decode::decode(decoder)?;
+            if nblocks < 2 { return err("must have at least 2 nblocks"); }
+            nblocks_per_phase.push(nblocks);
+        }
+
+
+        /* The vectors for the cores */
+        if nphases > 0 && (nphases != salt.len()+1) { return err("salt has the wrong length"); } /* TODO: unredund this */
+        let mut core : Vec<MapCore> = Vec::with_capacity(nphases);
         let mut hashcur = hash_key;
         let mut cur_plan = plan;
-        for (i,core_vec) in dec_core.into_iter().enumerate() {
-            /* bits per value for the phase according to plan zeros */
+        for phase in 0..nphases {
+            let nblocks = nblocks_per_phase[phase];
             let next_plan = cur_plan & (cur_plan-1);
             let bpv = next_plan.trailing_zeros() - cur_plan.trailing_zeros();
             cur_plan = next_plan;
-    
-            /* reuse existing checker logic for MapCoreSer */
-            let this_core = decode_map_core(hashcur, bpv as u8, core_vec)
-                .map_err(|e| DecodeError::OtherString(e.to_string()))?;
+
+            /* multiply and check for overflow */
+            let mul1 : usize = nblocks.checked_mul(BLOCKSIZE)
+                .ok_or(DecodeError::OtherString("overflow on multiply".to_string()))?;
+            let mul2 : usize = mul1.checked_mul(bpv as usize)
+                .ok_or(DecodeError::OtherString("overflow on multiply".to_string()))?;
+
+            /* Read the blocks in straight */
+            let mut owned = vec![0u8; mul2];
+            decoder.reader().read(&mut owned)?;
+            core.push( MapCore {
+                hash_key: hashcur,
+                bits_per_value: bpv as u8,
+                nblocks: nblocks,
+                blocks: Cow::Owned(owned)
+            });
 
             /* update hash key according to salt */
-            if i < salt.len() {
-                hashcur = choose_key(Some(hashcur), salt[i] as usize);
+            if phase < salt.len() {
+                hashcur = choose_key(Some(hashcur), salt[phase] as usize);
             }
-            core.push(this_core);
         }
 
         Ok(CompressedMap{
@@ -503,6 +533,16 @@ impl <K,V> Decode for CompressedMap<K,V> where V: Decode {
             _phantom: PhantomData::default()
         })
     }
+}
+
+impl <'a,K:Hash,V> Index<&K> for CompressedMap<'a,K,V> where {
+    type Output = V;
+    fn index(&self, index: &K) -> &V { self.query(index) }
+}
+
+impl <'a,K:Hash,V> Index<K> for CompressedMap<'a,K,V> where {
+    type Output = V;
+    fn index(&self, index: K) -> &V { self.query(&index) }
 }
 
 /** Utility: vector with bitset selecting which of its elements are iterated over. */
@@ -573,10 +613,7 @@ mod tests {
             options.key_gen = Some(seed[..16].try_into().unwrap());
 
             let compressed_map = CompressedMap::build(&map, &mut options).unwrap();
-
-            for (k,v) in map {
-                assert_eq!(compressed_map.query(&k), &v);
-            }
+            for (k,v) in map { assert_eq!(compressed_map[k], v); }
 
             /* test serialization */
             let ser = encode_to_vec(&compressed_map, STD_BINCODE_CONFIG);
