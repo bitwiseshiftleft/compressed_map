@@ -1,13 +1,9 @@
-# Ser/deser
-
-* Check that bincode code looks sane
-* Stabilize interface and format
-
 # Other release items
 
 * Convenience methods, at least, for file handling
 * Enable mmap?
 * C / C++ interface / dynamic lib
+* File handling
 * Demo app
 * Examples in doc
 * Make sure it builds automatically with AVX2 when possible
@@ -21,11 +17,6 @@
 * Improve pseudoinverse
 * More profile-driven optimization
 * Compare which parts are still faster in C
-
-## API / included features
-
-* File handling
-* Demo: CRL compression.
 
 # Longer term
 

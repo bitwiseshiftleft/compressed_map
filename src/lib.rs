@@ -157,8 +157,6 @@ references to vectors by calling the `take_ownership` method.
 
 # Serialization
 
-TODO: until v0.2.0, the serialization format is not standardized.
-
 Serialization of maps is provided using the [`bincode`] crate.  All of [`CompressedMap`],
 [`ApproxSet`], [`CompressedRandomMap`] implement
 [`Encode`](bincode::enc::Encode) and [`BorrowDecode`](bincode::de::BorrowDecode).  Once
@@ -192,7 +190,7 @@ be chosen, which would have a false positive probability of 1.
 A [`CompressedMap`] is implemented by choosing an `i32` "`Locator`" according to
 several [`CompressedRandomMap`]s.  Each possible output is assigned a naturally aligned
 interval in `0..2`<sup>`32`</sup>, and if the locator is in that interval that value is the output.
-The individual maps are generated including only the (key,value) pairs that are required
+The individual maps are generated including only the `(key, value)` pairs that are required
 for correctness.
 */
 
