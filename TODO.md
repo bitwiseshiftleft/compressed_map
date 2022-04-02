@@ -1,10 +1,9 @@
 # Release items
 
 * Parameterize over hash object?
-* Convenience methods, at least, for file handling
+* Change usize to be 40 or 48 bits?
 * Enable mmap?
 * C / C++ interface / dynamic lib
-* File handling
 * Demo app
 * Examples in doc
 * Make sure it builds automatically with AVX2 when possible

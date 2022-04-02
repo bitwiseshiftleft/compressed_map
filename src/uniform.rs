@@ -22,6 +22,10 @@ use bincode::error::{EncodeError,DecodeError};
 use bincode::enc::write::Writer;
 use bincode::de::read::{BorrowReader};
 
+use std::io::{Read,Error,ErrorKind,BufWriter,Write};
+use std::fs::{File,OpenOptions};
+use std::path::Path;
+
 #[cfg(feature="threading")]
 use {
     std::sync::{Arc,Mutex,Condvar},
@@ -372,15 +376,46 @@ pub(crate) struct MapCore<'a> {
     pub(crate) blocks: Cow<'a, [u8]>,
 }
 
-/** Take ownership of a core */
-pub(crate) fn own_core<'a,'b>(mc: MapCore<'a>) -> MapCore<'b> {
-    MapCore {
-        hash_key: mc.hash_key,
-        bits_per_value: mc.bits_per_value,
-        nblocks: mc.nblocks,
-        blocks: Cow::Owned(mc.blocks.into_owned())
+impl<'a> MapCore<'a>  {
+    /** Write the core to a new file. */
+    pub(crate) fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
+        let file = OpenOptions::new().create_new(true).write(true).open(path)?;
+        let mut writer = BufWriter::new(file);
+        bincode::encode_into_std_write(self, &mut writer, STD_BINCODE_CONFIG).map_err(
+            |e| match e {
+                EncodeError::Io{ error:e, index:_s } => e,
+                EncodeError::Other(s) => Error::new(ErrorKind::Other, s),
+                _ => Error::new(ErrorKind::Other, e.to_string()),
+        })?;
+        writer.flush()
+    }
+
+    /** Read from a file. */
+    pub(crate) fn read_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
+        let mut file = File::open(path)?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        let (unowned,sz) : (MapCore,usize)
+            = bincode::decode_from_slice(&buf, STD_BINCODE_CONFIG)
+            .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
+        if sz < buf.len() {
+            Err(Error::new(ErrorKind::Other, "bytes left over on read_from_file".to_string()))
+        } else {
+            Ok(unowned.take_ownership())
+        }
+    }
+
+    /** Take ownership of a core */
+    pub(crate) fn take_ownership<'b>(self) -> MapCore<'b> {
+        MapCore {
+            hash_key: self.hash_key,
+            bits_per_value: self.bits_per_value,
+            nblocks: self.nblocks,
+            blocks: Cow::Owned(self.blocks.into_owned())
+        }
     }
 }
+
 
 const MAGIC: &[u8;4] = b"cmc1";
 impl <'a> Encode for MapCore<'a> {
@@ -619,52 +654,6 @@ impl <'a> MapCore<'a> {
     }
 }
 
-
-/**
- * Approximate sets.
- *
- * These are like [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter),
- * except that are slower to construct, can't be modified once constructed,
- * and use about 30% less space.
- *
- * They store a compressed representation of a set `S` of objects.  From that
- * representation you can query whether an object is in the set.
- * 
- * There is a small, adjustable false positive probability, and no
- * false negatives.  That is, if you query an object that really was in the
- * set, you will always get `true`.  If you query an object not in the set,
- * you will usually get `false`, but not always: there is a small false
- * positive rate, according to the [`BuildOptions`].  There is a tradeoff:
- * the smaller the false positive rate, the more space is used by the
- * [`ApproxSet`].
- *
- * Internally, an [`ApproxSet`] is just a [`CompressedRandomMap`]
- * which maps all the elements of the set to zero.
- */
-#[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Encode)]
-pub struct ApproxSet<'a,K> {
-    /** Untyped map object, consulted after hashing. */
-    core: MapCore<'a>,
-
-    /** Phantom to hold the type of K */
-    _phantom: PhantomData<K>,
-}
-
-impl <'a, 'de:'a, K> BorrowDecode<'de> for ApproxSet<'a,K> {
-    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        Ok(ApproxSet{
-            core: BorrowDecode::borrow_decode(decoder)?,
-            _phantom: PhantomData::default()
-        })
-    }
-}
-
-impl <'a,K> Clone for ApproxSet<'a,K> {
-    fn clone(&self) -> Self {
-        ApproxSet { core: self.core.clone(), _phantom:PhantomData::default() }
-    }
-}
-
 /**
  * Options to build a [`CompressedMap`](crate::CompressedMap),
  * [`CompressedRandomMap`] or [`ApproxSet`].
@@ -896,7 +885,31 @@ where Response:From<V> {
      * own the data independently.
      */
     pub fn take_ownership<'b>(self) -> CompressedRandomMap<'b,K,V> {
-        CompressedRandomMap { core: own_core(self.core), _phantom:PhantomData::default() }
+        CompressedRandomMap { core: self.core.take_ownership(), _phantom:PhantomData::default() }
+    }
+
+    /**
+     * Write the map to a new file.
+     *
+     * Raise an error if the file exists, or cannot be created, or if an I/O
+     * error occurs.
+     */
+     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
+        self.core.write_to_file(path)
+    }
+
+    /**
+     * Read a map from a file.
+     *
+     * Return an error if the file doesn't exist or is not readable, if an I/O error
+     * occurs, if the object is corrupt, or if there are bytes left at the end of the
+     * file after decoding.
+     */
+    pub fn read_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
+        Ok(CompressedRandomMap {
+            core: MapCore::read_from_file(path)?,
+            _phantom:PhantomData::default()
+        })
     }
 }
 
@@ -908,6 +921,52 @@ impl <'a, 'de:'a, K,V> BorrowDecode<'de> for CompressedRandomMap<'a,K,V> {
         })
     }
 }
+
+
+/**
+ * Approximate sets.
+ *
+ * These are like [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter),
+ * except that are slower to construct, can't be modified once constructed,
+ * and use about 30% less space.
+ *
+ * They store a compressed representation of a set `S` of objects.  From that
+ * representation you can query whether an object is in the set.
+ * 
+ * There is a small, adjustable false positive probability, and no
+ * false negatives.  That is, if you query an object that really was in the
+ * set, you will always get `true`.  If you query an object not in the set,
+ * you will usually get `false`, but not always: there is a small false
+ * positive rate, according to the [`BuildOptions`].  There is a tradeoff:
+ * the smaller the false positive rate, the more space is used by the
+ * [`ApproxSet`].
+ *
+ * Internally, an [`ApproxSet`] is just a [`CompressedRandomMap`]
+ * which maps all the elements of the set to zero.
+ */
+ #[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Encode)]
+ pub struct ApproxSet<'a,K> {
+     /** Untyped map object, consulted after hashing. */
+     core: MapCore<'a>,
+ 
+     /** Phantom to hold the type of K */
+     _phantom: PhantomData<K>,
+ }
+ 
+ impl <'a, 'de:'a, K> BorrowDecode<'de> for ApproxSet<'a,K> {
+     fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+         Ok(ApproxSet{
+             core: BorrowDecode::borrow_decode(decoder)?,
+             _phantom: PhantomData::default()
+         })
+     }
+ }
+ 
+ impl <'a,K> Clone for ApproxSet<'a,K> {
+     fn clone(&self) -> Self {
+         ApproxSet { core: self.core.clone(), _phantom:PhantomData::default() }
+     }
+ }
 
 impl <'a,K:Hash> ApproxSet<'a,K> {
     /** Default bits per value if none is specified. */
@@ -982,7 +1041,28 @@ impl <'a,K:Hash> ApproxSet<'a,K> {
      * own the data independently.
      */
     pub fn take_ownership<'b>(self) -> ApproxSet<'b,K> {
-        ApproxSet { core: own_core(self.core), _phantom:PhantomData::default() }
+        ApproxSet { core: self.core.take_ownership(), _phantom:PhantomData::default() }
+    }
+
+    /**
+     * Write the approx set to a new file.
+     *
+     * Raise an error if the file exists, or cannot be created, or if an I/O
+     * error occurs.
+     */
+     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
+        self.core.write_to_file(path)
+    }
+
+    /**
+     * Read a approx set from a file.
+     *
+     * Return an error if the file doesn't exist or is not readable, if an I/O error
+     * occurs, if the object is corrupt, or if there are bytes left at the end of the
+     * file after decoding.
+     */
+    pub fn read_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
+        Ok(ApproxSet { core: MapCore::read_from_file(path)?, _phantom:PhantomData::default() })
     }
 }
 

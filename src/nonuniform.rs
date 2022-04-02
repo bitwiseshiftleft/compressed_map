@@ -7,7 +7,7 @@
  */
 
 use crate::uniform::{MapCore,CompressedRandomMap,BuildOptions,
-    choose_key,own_core,BLOCKSIZE};
+    choose_key,BLOCKSIZE,STD_BINCODE_CONFIG};
 use crate::tilematrix::bitset::{BitSet,BitSetIterator};
 use std::collections::HashMap;
 use core::marker::PhantomData;
@@ -23,6 +23,9 @@ use bincode::error::{EncodeError,DecodeError};
 use bincode::enc::write::Writer;
 
 use std::borrow::Cow;
+use std::io::{Read,Error,ErrorKind,BufWriter,Write};
+use std::fs::{File,OpenOptions};
+use std::path::Path;
 
 type Locator = u32;
 type Plan = Locator;
@@ -422,9 +425,49 @@ impl <'a,K:Hash,V> CompressedMap<'a,K,V> {
             plan: self.plan,
             response_map: self.response_map,
             salt: self.salt,
-            core: self.core.into_iter().map(own_core).collect(),
+            core: self.core.into_iter().map(|c| c.take_ownership()).collect(),
             _phantom: PhantomData::default()
+        }
+    }
 
+    /**
+     * Write the map to a new file.
+     *
+     * Raise an error if the file exists, or cannot be created, or if an I/O
+     * error occurs.
+     */
+    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Error>
+    where V: Encode {
+        let file = OpenOptions::new().create_new(true).write(true).open(path)?;
+        let mut writer = BufWriter::new(file);
+        bincode::encode_into_std_write(self, &mut writer, STD_BINCODE_CONFIG).map_err(
+            |e| match e {
+                EncodeError::Io{ error:e, index:_s } => e,
+                EncodeError::Other(s) => Error::new(ErrorKind::Other, s),
+                _ => Error::new(ErrorKind::Other, e.to_string()),
+        })?;
+        writer.flush()
+    }
+
+    /**
+     * Read a map from a file.
+     *
+     * Return an error if the file doesn't exist or is not readable, if an I/O error
+     * occurs, if the map is corrupt, or if there are bytes left at the end of the
+     * file after decoding.
+     */
+    pub fn read_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Error>
+    where V: Decode {
+        let mut file = File::open(path)?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        let (unowned,sz) : (CompressedMap<K,V>,usize)
+            = bincode::decode_from_slice(&buf, STD_BINCODE_CONFIG)
+            .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
+        if sz < buf.len() {
+            Err(Error::new(ErrorKind::Other, "bytes left over on read_from_file".to_string()))
+        } else {
+            Ok(unowned.take_ownership())
         }
     }
 }
