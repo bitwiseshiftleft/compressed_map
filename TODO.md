@@ -1,6 +1,7 @@
 
 # Rust port
 
+* Use bincode instead of serde; possibly make serde a feature
 * Use outer struct with AsRef, and eliminate MapCore?
 * Mark vectorized APIs as unsafe.
 * Decide on assert! / debug_assert! / nothing

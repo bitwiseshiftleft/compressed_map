@@ -7,13 +7,17 @@
  */
 
 use crate::uniform::{MapCore,CompressedRandomMap,
-    LfrBlock,BuildOptions,HasherKey,MapCoreSer,choose_key};
+    LfrBlock,BuildOptions,choose_key,decode_map_core};
 use crate::tilematrix::bitset::{BitSet,BitSetIterator};
 use std::collections::HashMap;
 use core::marker::PhantomData;
 use std::hash::Hash;
 use std::cmp::{min,Ord,Ordering};
-use serde::{Serialize,Deserialize};
+
+use bincode::{Encode,Decode};
+use bincode::enc::{Encoder};
+use bincode::de::{Decoder};
+use bincode::error::{EncodeError,DecodeError};
 
 type Locator = u32;
 type Plan = Locator;
@@ -141,10 +145,7 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
  * at most 11% more space than the Shannon entropy of `D`, plus the size of
  * the values themselves.
  */
-#[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Serialize,Deserialize)]
-#[serde(bound(deserialize="V:Clone+Deserialize<'de>"))]
-#[serde(bound(serialize="V:Clone+Serialize"))]
-#[serde(try_from="CompressedMapSer<V>",into="CompressedMapSer<V>")]
+#[derive(Eq,PartialEq,Ord,PartialOrd,Debug)]
 pub struct CompressedMap<K,V> {
     plan: Plan,
     response_map: ResponseMap<V>,
@@ -410,98 +411,104 @@ impl <K:Hash+Eq+Sync,V:Hash+Ord+Clone> CompressedMap<K,V> {
     }
 }
 
-
-/** Packed version for serialization */
-#[derive(Eq,Ord,PartialEq,PartialOrd,Debug,Serialize,Deserialize)]
-struct CompressedMapSer<V> {
-    hash_key: HasherKey,
-    plan: Plan,
-    log_responses: Vec<u8>,
-    salt: Vec<u8>,
-    responses: Vec<V>,
-    core: Vec<Vec<LfrBlock>>
-}
-
-impl <K,V> From<CompressedMap<K,V>> for CompressedMapSer<V> {
-    fn from(map: CompressedMap<K,V>) -> Self {
-        assert!(map.response_map.len() >= 1);
-        let mut log_responses = Vec::with_capacity(map.response_map.len()-1);
-        for i in 0..map.response_map.len()-1 {
-            let delta = map.response_map[i+1].0 - map.response_map[i].0;
+/* TODO: shouldn't need clone for this */
+impl <K,V> Encode for CompressedMap<K,V> where V: Encode+Clone {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        assert!(self.response_map.len() >= 1);
+        let mut log_responses = Vec::with_capacity(self.response_map.len()-1);
+        for i in 0..self.response_map.len()-1 {
+            let delta = self.response_map[i+1].0 - self.response_map[i].0;
             log_responses.push(delta.leading_zeros() as u8+1);
         }
-        let responses = map.response_map.into_iter().map(|(_loc,v)| v).collect();
-        let hash_key = if map.core.len() == 0 {
+        let hash_key = if self.core.len() == 0 {
             [0u8;16]
         } else {
-            map.core[0].hash_key
+            self.core[0].hash_key
         };
-        CompressedMapSer {
-            hash_key: hash_key,
-            plan: map.plan,
-            salt: map.salt,
-            log_responses: log_responses,
-            responses: responses,
-            core: map.core.into_iter().map(|umap| umap.blocks).collect()
+
+        /* TODO: don't clone */
+        let core : Vec<Vec<u32>> = self.core.clone().into_iter().map(|umap| umap.blocks).collect();
+
+        /* TODO: before we standardize the file format */
+        Encode::encode(&hash_key, encoder)?;
+        Encode::encode(&self.plan, encoder)?;
+        Encode::encode(&self.salt, encoder)?;
+        Encode::encode(&log_responses, encoder)?;
+        for (_l,v) in &self.response_map {
+            Encode::encode(v, encoder)?;
         }
+        /* FIXME: concat and realign this, so that all data goes together */
+        Encode::encode(&core, encoder)
     }
 }
 
-impl <K,V> TryFrom<CompressedMapSer<V>> for CompressedMap<K,V> {
-    type Error = &'static str;
-    fn try_from(ser: CompressedMapSer<V>) -> Result<CompressedMap<K,V>,&'static str> {
-        /* Sanity check */
-        let nphases = ser.plan.count_ones() as usize;
-        if nphases > 0 && (nphases != ser.salt.len()+1) { return Err("ser.salt has the wrong length"); }
-        if nphases != ser.core.len()   { return Err("ser.core has the wrong length"); }
-        if ser.responses.len() != ser.log_responses.len() + 1 {
-            return Err("ser responses len doesn't match log responses+1");
+impl <K,V> Decode for CompressedMap<K,V> where V: Decode {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        /* Decode from the stream */
+        let hash_key = Decode::decode(decoder)?;
+        let plan : Locator = Decode::decode(decoder)?;
+        let salt : Vec<u8> = Decode::decode(decoder)?;
+        let log_responses : Vec<u8> = Decode::decode(decoder)?;
+        let mut responses : Vec<V> = Vec::with_capacity(log_responses.len()+1);
+        for _ in 0..log_responses.len()+1 {
+            responses.push(Decode::decode(decoder)?);
+        }
+        let dec_core : Vec<Vec<LfrBlock>> = Decode::decode(decoder)?;
+
+        fn err<Nope>(descr: &'static str) -> Result<Nope, DecodeError> {
+            Err(DecodeError::OtherString(descr.to_string()))
         }
 
-        let mut response_map = Vec::with_capacity(ser.responses.len());
+        /* Sanity check */
+        let nphases = plan.count_ones() as usize;
+        if nphases > 0 && (nphases != salt.len()+1) { return err("salt has the wrong length"); }
+        if nphases != dec_core.len()   { return err("core has the wrong length"); }
+        if responses.len() != log_responses.len() + 1 {
+            return err("responses len doesn't match log responses+1");
+        }
+
+        let mut response_map = Vec::with_capacity(responses.len());
         let mut total : Locator = 0;
-        for (i,response) in ser.responses.into_iter().enumerate() {
-            if i < ser.log_responses.len() {
-                let logr = ser.log_responses[i] as u32;
+        for (i,response) in responses.into_iter().enumerate() {
+            if i < log_responses.len() {
+                let logr = log_responses[i] as u32;
                 if logr == 0 || logr > Locator::BITS {
-                    return Err("invalid logr");
+                    return err("invalid logr");
                 }
                 let r = 1 << (Locator::BITS - logr);
                 response_map.push((total,response));
-                total = total.checked_add(r).ok_or("responses must sum to < Locator::BITS")?;
+                total = total.checked_add(r)
+                    .ok_or(DecodeError::OtherString("responses must sum to < Locator::BITS".to_string()))?;
             } else {
                 response_map.push((total,response));
             }
         }
 
-
-        let mut core = Vec::with_capacity(ser.core.len());
-        let mut hashcur = ser.hash_key;
-        let mut cur_plan = ser.plan;
-        for (i,core_vec) in ser.core.into_iter().enumerate() {
+        /* Make maps for the phases */
+        let mut core : Vec<MapCore> = Vec::with_capacity(dec_core.len());
+        let mut hashcur = hash_key;
+        let mut cur_plan = plan;
+        for (i,core_vec) in dec_core.into_iter().enumerate() {
             /* bits per value for the phase according to plan zeros */
             let next_plan = cur_plan & (cur_plan-1);
             let bpv = next_plan.trailing_zeros() - cur_plan.trailing_zeros();
             cur_plan = next_plan;
     
             /* reuse existing checker logic for MapCoreSer */
-            let this_core = MapCore::try_from(MapCoreSer {
-                hash_key: hashcur,
-                bits_per_value: bpv as u8,
-                blocks: core_vec,
-            })?;
+            let this_core = decode_map_core(hashcur, bpv as u8, core_vec)
+                .map_err(|e| DecodeError::OtherString(e.to_string()))?;
 
             /* update hash key according to salt */
-            if i < ser.salt.len() {
-                hashcur = choose_key(Some(hashcur), ser.salt[i] as usize);
+            if i < salt.len() {
+                hashcur = choose_key(Some(hashcur), salt[i] as usize);
             }
             core.push(this_core);
         }
 
         Ok(CompressedMap{
-            plan: ser.plan,
+            plan: plan,
             response_map: response_map,
-            salt: ser.salt,
+            salt: salt,
             core: core,
             _phantom: PhantomData::default()
         })
@@ -545,8 +552,9 @@ mod tests {
     use rand::{Rng,SeedableRng};
     use rand::rngs::StdRng;
     use crate::nonuniform::{CompressedMap,BuildOptions};
+    use crate::STD_BINCODE_CONFIG;
     use std::collections::HashMap;
-    use serde_json::{from_str, to_string};
+    use bincode::{encode_to_vec,decode_from_slice};
 
     #[test]
     fn test_nonuniform_map() {
@@ -581,14 +589,12 @@ mod tests {
             }
 
             /* test serialization */
-            let ser = to_string(&compressed_map);
+            let ser = encode_to_vec(&compressed_map, STD_BINCODE_CONFIG);
             assert!(ser.is_ok());
             let ser = ser.unwrap();
-            let deser = from_str(&ser);
-            // println!("{}", ser);
+            let deser = decode_from_slice(&ser, STD_BINCODE_CONFIG);
             assert!(deser.is_ok());
-            assert_eq!(compressed_map, deser.unwrap()); 
-
+            assert_eq!(compressed_map, deser.unwrap().0);
         }
     }
 }

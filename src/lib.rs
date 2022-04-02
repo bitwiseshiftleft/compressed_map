@@ -24,7 +24,7 @@
  * hundreds to hundred-millions of keys, but only a few values.  The motivating
  * example is certificate revocation, à la
  * [CRLite](https://blog.mozilla.org/security/2020/01/09/crlite-part-2-end-to-end-design/).
- * In this example, a [`CompressedMap`]`<Certificate,bool>` could represent which
+ * In this example, a [`CompressedMap`]`STD_BINCODE_CONFIG<Certificate,bool>` could represent which
  * certificates are revoked and which are still valid.
  * 
  * ## Random compressed maps
@@ -126,14 +126,22 @@
  *
  * # Serialization
  *
- * Serialization of maps is provided using the [`serde`] crate.  All of [`CompressedMap`],
+ * TODO: until v0.2.0, the serialization format is not standardized.
+ * 
+ * Serialization of maps is provided using the [`bincode`] crate.  All of [`CompressedMap`],
  * [`ApproxSet`], [`CompressedRandomMap`] and even [`BuildOptions`] implement
- * [`Serialize`](serde::Serialize) and [`Deserialize`](serde::Deserialize).
+ * [`Encode`](bincode::enc::Encode) and [`Decode`](bincode::de::Decode).
+ *
+ * For compatibility, simplicity and speed, please use the [`STD_BINCODE_CONFIG`] when
+ * calling `bincode`'s serializers.  That way all the u32's won't get recode in varint format.
  *
  * Because the maps and sets in this crate do not represent their keys, this doesn't rely
- * on `K:Serialize` or `K:Deserialize` or `Clone`.  Because [`CompressedMap<K,V>`] can take
+ * on `K:Encode` or `K:Decode` or `Clone`.  Because [`CompressedMap<K,V>`] can take
  * nearly arbitrary values, and represents those value, it does rely on these traits for
  * `V`.
+ *
+ * TODO: Provide [`BorrowDecode`](bincode::dec::BorrowDecode).
+ * TODO: should they be u32's at all?  What about BorrowDecode?
  * 
  * # Internals
  *
@@ -175,7 +183,7 @@ mod tilematrix;
 mod uniform;
 mod nonuniform;
 
-pub use uniform::{BuildOptions,CompressedRandomMap,ApproxSet};
+pub use uniform::{BuildOptions,CompressedRandomMap,ApproxSet,STD_BINCODE_CONFIG};
 pub use nonuniform::{CompressedMap};
 
 use tilematrix::tile;

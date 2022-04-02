@@ -14,7 +14,12 @@ use std::cmp::max;
 use rand::{RngCore};
 use rand::rngs::OsRng;
 use siphasher::sip128::{Hasher128, SipHasher13, Hash128};
-use serde::{Serialize,Deserialize};
+
+use bincode::{Encode,Decode};
+use bincode::enc::{Encoder};
+use bincode::de::{Decoder};
+use bincode::error::{EncodeError,DecodeError};
+
 
 #[cfg(feature="threading")]
 use {
@@ -186,9 +191,6 @@ impl<T> Channel<T> {
     fn reserve(&self) -> bool { true }
 }
 
-
-
-
 /** A block or group of blocks for the hierarchical solver */
 struct BlockGroup {
     /* Forward solution; row IDs in solution; number of expected rows in reverse solution */
@@ -350,20 +352,8 @@ pub(crate) fn choose_key(base_key: Option<HasherKey>, n:usize) -> HasherKey {
     }
 }
 
-/**
- * Form of MapCore with validation and smaller serialization
- * Also used to serialize CompressedMap
- */
-#[derive(Serialize,Deserialize)]
-pub(crate) struct MapCoreSer {
-    pub(crate) hash_key: HasherKey,
-    pub(crate) bits_per_value: u8,
-    pub(crate) blocks: Vec<LfrBlock>,
-}
-
 /** Untyped core of a mapping object. */
-#[derive(Eq,PartialEq,Ord,PartialOrd,Clone,Debug,Serialize,Deserialize)]
-#[serde(try_from="MapCoreSer",into="MapCoreSer")]
+#[derive(Eq,PartialEq,Ord,PartialOrd,Clone,Debug)]
 pub(crate) struct MapCore {
     /** The SipHash key used to hash inputs. */
     pub(crate) hash_key: HasherKey,
@@ -378,40 +368,49 @@ pub(crate) struct MapCore {
     pub(crate) blocks: Vec<LfrBlock>,
 }
 
-impl TryFrom<MapCoreSer> for MapCore {
-    type Error = &'static str;
-    fn try_from(ser: MapCoreSer) -> Result<MapCore,&'static str> {
-        let nblocks = if ser.bits_per_value == 0 {
-            if ser.blocks.len() != 0 { return Err("can't have blocks if bits_per_value==0"); }
-            2
-        } else if ser.bits_per_value > Response::BITS as u8 {
-            return Err("can't have have more than Response::BITS per value");
-        } else if ser.blocks.len() % ser.bits_per_value as usize != 0 {
-            return Err("bits_per_value must evenly divide blocks.len()");
-        } else {
-            ser.blocks.len() / ser.bits_per_value as usize
-        };
-        if nblocks < 2 {
-            Err("must have nblocks >= 2")
-        } else {
-            Ok(MapCore{
-                hash_key: ser.hash_key,
-                bits_per_value: ser.bits_per_value,
-                blocks: ser.blocks,
-                nblocks: nblocks
-            })
-        }
+/** Decoding steps to figure out nblocks */
+pub(crate) fn decode_map_core(
+    hash_key: HasherKey,
+    bits_per_value: u8,
+    blocks: Vec<LfrBlock>
+) -> Result<MapCore, &'static str> {
+    let nblocks = if bits_per_value == 0 {
+        if blocks.len() != 0 { return Err("can't have blocks if bits_per_value==0"); }
+        2
+    } else if bits_per_value > Response::BITS as u8 {
+        return Err("can't have have more than Response::BITS per value");
+    } else if blocks.len() % bits_per_value as usize != 0 {
+        return Err("bits_per_value must evenly divide blocks.len()");
+    } else {
+        blocks.len() / bits_per_value as usize
+    };
+    if nblocks < 2 {
+        Err("must have nblocks >= 2")
+    } else {
+        Ok(MapCore{
+            hash_key: hash_key,
+            bits_per_value: bits_per_value,
+            blocks: blocks,
+            nblocks: nblocks
+        })
     }
 }
 
-impl From<MapCore> for MapCoreSer {
-    fn from(core:MapCore) -> MapCoreSer {
-        MapCoreSer {
-            hash_key: core.hash_key,
-            bits_per_value: core.bits_per_value,
-            blocks: core.blocks
-        }
-    } 
+impl Encode for MapCore {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        Encode::encode(&self.hash_key, encoder)?;
+        Encode::encode(&self.bits_per_value, encoder)?;
+        Encode::encode(&self.blocks, encoder)
+    }
+}
+
+impl Decode for MapCore {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let hash_key       = Decode::decode(decoder)?;
+        let bits_per_value = Decode::decode(decoder)?;
+        let blocks         = Decode::decode(decoder)?;
+        decode_map_core(hash_key, bits_per_value, blocks).map_err(|e| DecodeError::OtherString(e.to_string()))
+    }
 }
 
 impl MapCore {
@@ -622,8 +621,7 @@ impl MapCore {
  *
  * [`CompressedRandomMap`] is building block for [`CompressedMap`](crate::CompressedMap).
  */
-#[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Serialize,Deserialize)]
-#[serde(try_from="MapCoreSer",into="MapCoreSer")]
+#[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Encode,Decode)]
 pub struct CompressedRandomMap<K,V> {
     /** Untyped map object, consulted after hashing. */
     pub(crate) core: MapCore,
@@ -636,18 +634,6 @@ impl <K,V> Clone for CompressedRandomMap<K,V> {
     fn clone(&self) -> Self {
         CompressedRandomMap { core: self.core.clone(), _phantom:PhantomData::default() }
     }
-}
-
-impl <K,V> TryFrom<MapCoreSer> for CompressedRandomMap<K,V> {
-    type Error = &'static str;
-    fn try_from(ser: MapCoreSer) -> Result<CompressedRandomMap<K,V>,&'static str> {
-        let core = MapCore::try_from(ser)?;
-        Ok(CompressedRandomMap { core: core, _phantom: PhantomData::default() })
-    }
-}
-
-impl <K,V> From<CompressedRandomMap<K,V>> for MapCoreSer {
-    fn from(map: CompressedRandomMap<K,V>) -> MapCoreSer { MapCoreSer::from(map.core) }
 }
 
 /**
@@ -671,8 +657,7 @@ impl <K,V> From<CompressedRandomMap<K,V>> for MapCoreSer {
  * Internally, an [`ApproxSet`] is just a [`CompressedRandomMap`]
  * which maps all the elements of the set to zero.
  */
-#[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Serialize,Deserialize)]
-#[serde(try_from="MapCoreSer",into="MapCoreSer")]
+#[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Encode,Decode)]
 pub struct ApproxSet<K> {
     /** Untyped map object, consulted after hashing. */
     core: MapCore,
@@ -687,18 +672,6 @@ impl <K> Clone for ApproxSet<K> {
     }
 }
 
-impl <K> TryFrom<MapCoreSer> for ApproxSet<K> {
-    type Error = &'static str;
-    fn try_from(ser: MapCoreSer) -> Result<ApproxSet<K>,&'static str> {
-        let core = MapCore::try_from(ser)?;
-        Ok(ApproxSet { core: core, _phantom: PhantomData::default() })
-    }
-}
-
-impl <K> From<ApproxSet<K>> for MapCoreSer {
-    fn from(set: ApproxSet<K>) -> MapCoreSer { MapCoreSer::from(set.core) }
-}
-
 /**
  * Options to build a [`CompressedMap`](crate::CompressedMap),
  * [`CompressedRandomMap`] or [`ApproxSet`].
@@ -706,7 +679,7 @@ impl <K> From<ApproxSet<K>> for MapCoreSer {
  * Implements `Default`, so you can get reasonable options
  * with `BuildOptions::default()`.
  */
-#[derive(Copy,Clone,PartialEq,Eq,Debug,Ord,PartialOrd,Serialize,Deserialize)]
+#[derive(Copy,Clone,PartialEq,Eq,Debug,Ord,PartialOrd,Encode,Decode)]
 pub struct BuildOptions{
     /**
      * How many times to try building the set?
@@ -954,13 +927,21 @@ impl <K:Hash> ApproxSet<K> {
     }
 }
 
+use bincode::config::*;
+/** Configuration to be used to encode / decode maps to binary file format */
+pub const STD_BINCODE_CONFIG : Configuration<LittleEndian,Fixint,SkipFixedArrayLength,NoLimit>
+    = bincode::config::standard()
+    .with_little_endian()
+    .with_fixed_int_encoding()
+    .skip_fixed_array_length();
+
 #[cfg(test)]
 mod tests {
-    use crate::uniform::{ApproxSet,CompressedRandomMap,BuildOptions};
+    use crate::uniform::{ApproxSet,CompressedRandomMap,BuildOptions,STD_BINCODE_CONFIG};
     use rand::{thread_rng,Rng,SeedableRng};
     use rand::rngs::StdRng;
     use std::collections::{HashMap,HashSet};
-    use serde_json::{from_str, to_string};
+    use bincode::{encode_to_vec,decode_from_slice};
 
     /* Test map functionality */
     #[test]
@@ -975,18 +956,18 @@ mod tests {
             }
             let mut options = BuildOptions::default();
             options.key_gen = Some(seed[..16].try_into().unwrap());
-            let hiermap = CompressedRandomMap::<u64,u8>::build(&map, &mut options).unwrap();
+            let crm = CompressedRandomMap::<u64,u8>::build(&map, &mut options).unwrap();
 
             for (k,v) in map.iter() {
-                assert_eq!(hiermap.try_query(&k), Some(*v));
+                assert_eq!(crm.try_query(&k), Some(*v));
             }
 
-            let ser = to_string(&hiermap);
+            let ser = encode_to_vec(&crm, STD_BINCODE_CONFIG);
             assert!(ser.is_ok());
             let ser = ser.unwrap();
-            let deser = from_str(&ser);
+            let deser = decode_from_slice(&ser, STD_BINCODE_CONFIG);
             assert!(deser.is_ok());
-            assert_eq!(hiermap, deser.unwrap()); 
+            assert_eq!(crm, deser.unwrap().0);
         }
     }
 
@@ -1014,16 +995,12 @@ mod tests {
             // println!("{} false positives", false_positives);
             assert!((false_positives as f64) < mu + 4.*mu.sqrt());
 
-            // let ser = approxset.serialize();
-            // let deser = ApproxSet::<u64>::deserialize(&ser);
-            // assert!(deser.is_some());
-            // assert_eq!(approxset, deser.unwrap()); 
-            let ser = to_string(&approxset);
+            let ser = encode_to_vec(&approxset, STD_BINCODE_CONFIG);
             assert!(ser.is_ok());
             let ser = ser.unwrap();
-            let deser = from_str(&ser);
+            let deser = decode_from_slice(&ser, STD_BINCODE_CONFIG);
             assert!(deser.is_ok());
-            assert_eq!(approxset, deser.unwrap()); 
+            assert_eq!(approxset, deser.unwrap().0);
         }
     }
 }

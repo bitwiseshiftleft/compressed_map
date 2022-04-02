@@ -8,12 +8,9 @@ threading = []
 
 [dependencies]
 # TODO: pin hashes
-serde = { version = "1.0", features = ["derive"] }
 siphasher = "0.3"
+bincode = "2.0.0-RC.1"
 rand = "0.8.5"
-
-[dev-dependencies]
-serde_json = "1.0"
 
 [target.'cfg(bench)'.dev-dependencies]
 criterion = "0.3"
