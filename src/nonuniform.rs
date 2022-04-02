@@ -411,8 +411,12 @@ impl <'a,K:Hash,V> CompressedMap<'a,K,V> {
     }
 }
 
+const MAGIC: &[u8;4] = b"cnm1";
+
 impl <'a,K,V> Encode for CompressedMap<'a,K,V> where V: Encode {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        Encode::encode(MAGIC, encoder)?;
+
         assert!(self.response_map.len() >= 1);
         let mut log_responses = Vec::with_capacity(self.response_map.len()-1);
         for i in 0..self.response_map.len()-1 {
@@ -425,7 +429,6 @@ impl <'a,K,V> Encode for CompressedMap<'a,K,V> where V: Encode {
             self.core[0].hash_key
         };
 
-        /* TODO: before we standardize the file format */
         Encode::encode(&log_responses, encoder)?;
         for (_l,v) in &self.response_map {
             Encode::encode(v, encoder)?;
@@ -446,16 +449,20 @@ impl <'a,K,V> Encode for CompressedMap<'a,K,V> where V: Encode {
 
 impl <'a,K,V> Decode for CompressedMap<'a,K,V> where V: Decode {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        /* Decode the response map */
+        fn err<Nope>(descr: &'static str) -> Result<Nope, DecodeError> {
+            Err(DecodeError::OtherString(descr.to_string()))
+        }
+        let magic : [u8;4] = Decode::decode(decoder)?;
+        if &magic != MAGIC {
+            return err("magic value mismatch");
+        }
+
         /* First: log_responses and responses */
         let log_responses : Vec<u8> = Decode::decode(decoder)?;
         let mut responses : Vec<V> = Vec::with_capacity(log_responses.len()+1);
         for _ in 0..log_responses.len()+1 {
             responses.push(Decode::decode(decoder)?);
-        }
-
-        /* Decode the response map */
-        fn err<Nope>(descr: &'static str) -> Result<Nope, DecodeError> {
-            Err(DecodeError::OtherString(descr.to_string()))
         }
         let mut response_map = Vec::with_capacity(responses.len());
         let mut total : Locator = 0;

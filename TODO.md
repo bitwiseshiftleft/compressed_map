@@ -1,6 +1,5 @@
 # Ser/deser
 
-* Add a version number to bincode code
 * Check that bincode code looks sane
 * Borrowing decode
 * Stabilize interface and format

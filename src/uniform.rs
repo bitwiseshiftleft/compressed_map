@@ -372,8 +372,10 @@ pub(crate) struct MapCore<'a> {
     pub(crate) blocks: Cow<'a, [u8]>,
 }
 
+const MAGIC: &[u8;4] = b"cmc1";
 impl <'a> Encode for MapCore<'a> {
     fn encode<'b,E: Encoder>(&'b self, encoder: &mut E) -> Result<(), EncodeError> {
+        Encode::encode(MAGIC, encoder)?;
         Encode::encode(&self.hash_key, encoder)?;
         Encode::encode(&self.bits_per_value, encoder)?;
         Encode::encode(&self.nblocks, encoder)?;
@@ -383,6 +385,11 @@ impl <'a> Encode for MapCore<'a> {
 
 impl <'a> Decode for MapCore<'a> {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let magic : [u8;4] = Decode::decode(decoder)?;
+        if &magic != MAGIC {
+            return Err(DecodeError::OtherString("magic value mismatch".to_string()));
+        }
+
         let hash_key       = Decode::decode(decoder)?;
         let bits_per_value = Decode::decode(decoder)?;
         let nblocks : usize = Decode::decode(decoder)?;
@@ -995,7 +1002,7 @@ mod tests {
                 false_positives += approxset.probably_contains(&rng.gen::<u64>()) as usize;
             }
             // println!("{} false positives", false_positives);
-            assert!((false_positives as f64) < mu + 4.*mu.sqrt());
+            assert!((false_positives as f64) < mu + 5.*mu.sqrt());
 
             let ser = encode_to_vec(&approxset, STD_BINCODE_CONFIG);
             assert!(ser.is_ok());
