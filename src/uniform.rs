@@ -889,9 +889,10 @@ where Response:From<V> {
     }
 
     /**
-     * Take ownership, possibly copying the data.
+     * Take ownership, possibly copying the data
      *
-     * This is if you created the object using [`borrow_decode`], but want to
+     * This is useful if you created the object using
+     * [`borrow_decode`](bincode::BorrowDecode::borrow_decode), but want to
      * own the data independently.
      */
     pub fn take_ownership<'b>(self) -> CompressedRandomMap<'b,K,V> {
@@ -976,7 +977,8 @@ impl <'a,K:Hash> ApproxSet<'a,K> {
     /**
      * Take ownership, possibly copying the data
      *
-     * This is if you created the object using [`borrow_decode`], but want to
+     * This is useful if you created the object using
+     * [`borrow_decode`](bincode::BorrowDecode::borrow_decode), but want to
      * own the data independently.
      */
     pub fn take_ownership<'b>(self) -> ApproxSet<'b,K> {

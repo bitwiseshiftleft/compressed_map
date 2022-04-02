@@ -124,13 +124,22 @@
  * * If threading is enabled, a thread running out of memory may be treated as a failure, causing
  *   a slow and resource-intensive series of retries (TODO: support errors as well as options).
  *
+ * # Ownership
+ *
+ * In order to facilitate referencing non-owned data (e.g. in an `mmap`'ed region), 
+ * [`CompressedMap`], [`ApproxSet`] and [`CompressedRandomMap`] have lifetime parameters
+ * for internal references.  They can instead use vectors, and do use vectors when built
+ * using `build` methods, which gives them arbitrary lifetime.  You can change the
+ * references to vectors by calling the `take_ownership` method.
+ * 
  * # Serialization
  *
  * TODO: until v0.2.0, the serialization format is not standardized.
  * 
  * Serialization of maps is provided using the [`bincode`] crate.  All of [`CompressedMap`],
- * [`ApproxSet`], [`CompressedRandomMap`] and even [`BuildOptions`] implement
- * [`Encode`](bincode::enc::Encode) and [`Decode`](bincode::de::Decode).
+ * [`ApproxSet`], [`CompressedRandomMap`] implement
+ * [`Encode`](bincode::enc::Encode) and [`BorrowDecode`](bincode::de::BorrowDecode).  Once
+ * you `BorrowDecode` the object, you can take extend the lifetime with `take_ownership`.
  *
  * For compatibility, simplicity and speed, please use the [`STD_BINCODE_CONFIG`] when
  * calling `bincode`'s serializers.  That way all the u32's won't get recode in varint format.
@@ -139,9 +148,6 @@
  * on `K:Encode` or `K:Decode` or `Clone`.  Because [`CompressedMap<K,V>`] can take
  * nearly arbitrary values, and represents those value, it does rely on these traits for
  * `V`.
- *
- * TODO: Provide [`BorrowDecode`](bincode::de::BorrowDecode).
- * TODO: should they be u32's at all?  What about BorrowDecode?
  * 
  * # Internals
  *

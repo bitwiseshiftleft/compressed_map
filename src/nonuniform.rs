@@ -409,11 +409,12 @@ impl <'a,K:Hash,V> CompressedMap<'a,K,V> {
         
         unreachable!("CompressedRandomMap must have been constructed wrong; we should have a response by now")
     }
-    
+
     /**
      * Take ownership, possibly copying the data
      *
-     * This is if you created the object using [`borrow_decode`], but want to
+     * This is useful if you created the object using
+     * [`borrow_decode`](bincode::BorrowDecode::borrow_decode), but want to
      * own the data independently.
      */
     pub fn take_ownership<'b>(self) -> CompressedMap<'b,K,V> {
