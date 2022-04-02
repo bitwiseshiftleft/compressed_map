@@ -1,5 +1,6 @@
-# Other release items
+# Release items
 
+* Parameterize over hash object?
 * Convenience methods, at least, for file handling
 * Enable mmap?
 * C / C++ interface / dynamic lib

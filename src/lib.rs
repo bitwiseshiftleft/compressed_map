@@ -161,6 +161,8 @@ references to vectors by calling the `take_ownership` method.
 
 # Serialization
 
+Note! Until v0.2.0, the compression format is not finalized.
+
 Serialization of maps is provided using the [`bincode`] crate.  All of [`CompressedMap`],
 [`ApproxSet`], [`CompressedRandomMap`] implement
 [`Encode`](bincode::enc::Encode) and [`BorrowDecode`](bincode::de::BorrowDecode).  Once
