@@ -1,16 +1,15 @@
 
 # Rust port
 
-* Use bincode instead of serde; possibly make serde a feature
 * Use outer struct with AsRef, and eliminate MapCore?
 * Mark vectorized APIs as unsafe.
 * Decide on assert! / debug_assert! / nothing
 * C / C++ interface
 * Demo app
 * Examples in doc
-* File handling
+* Convenienc methods for file handling
 * Make sure it builds with AVX2 when possible
-* Distinguish between "out of memory" and "matrix is not invertible"
+* Distinguish between "out of memory", "can't create thread" etc, and "matrix is not invertible"
 * Deal with overflow cases with billions of items in nonuniform maps.
 * Multithread hashing even if bucketsort isn't multithreaded.
 
