@@ -1,7 +1,6 @@
 # Ser/deser
 
 * Check that bincode code looks sane
-* Borrowing decode
 * Stabilize interface and format
 
 # Other release items

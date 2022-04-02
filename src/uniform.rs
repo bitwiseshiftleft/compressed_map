@@ -15,12 +15,12 @@ use rand::{RngCore};
 use rand::rngs::OsRng;
 use siphasher::sip128::{Hasher128, SipHasher13, Hash128};
 
-use bincode::{Encode,Decode};
+use bincode::{Encode,BorrowDecode,Decode};
 use bincode::enc::{Encoder};
-use bincode::de::{Decoder};
+use bincode::de::{BorrowDecoder};
 use bincode::error::{EncodeError,DecodeError};
 use bincode::enc::write::Writer;
-use bincode::de::read::Reader;
+use bincode::de::read::{BorrowReader};
 
 #[cfg(feature="threading")]
 use {
@@ -372,6 +372,16 @@ pub(crate) struct MapCore<'a> {
     pub(crate) blocks: Cow<'a, [u8]>,
 }
 
+/** Take ownership of a core */
+pub(crate) fn own_core<'a,'b>(mc: MapCore<'a>) -> MapCore<'b> {
+    MapCore {
+        hash_key: mc.hash_key,
+        bits_per_value: mc.bits_per_value,
+        nblocks: mc.nblocks,
+        blocks: Cow::Owned(mc.blocks.into_owned())
+    }
+}
+
 const MAGIC: &[u8;4] = b"cmc1";
 impl <'a> Encode for MapCore<'a> {
     fn encode<'b,E: Encoder>(&'b self, encoder: &mut E) -> Result<(), EncodeError> {
@@ -383,8 +393,8 @@ impl <'a> Encode for MapCore<'a> {
     }
 }
 
-impl <'a> Decode for MapCore<'a> {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl <'a, 'de:'a> BorrowDecode<'de> for MapCore<'a> {
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let magic : [u8;4] = Decode::decode(decoder)?;
         if &magic != MAGIC {
             return Err(DecodeError::OtherString("magic value mismatch".to_string()));
@@ -402,12 +412,11 @@ impl <'a> Decode for MapCore<'a> {
             .ok_or(DecodeError::OtherString("overflow on multiply".to_string()))?;
         let mul2 : usize = mul1.checked_mul(bits_per_value as usize)
             .ok_or(DecodeError::OtherString("overflow on multiply".to_string()))?;
-        let mut blocks = vec![0u8;mul2];
-        decoder.reader().read(&mut blocks)?;
+        let blocks = decoder.borrow_reader().take_bytes(mul2)?;
         Ok(MapCore {
             hash_key: hash_key,
             bits_per_value: bits_per_value,
-            blocks: Cow::Owned(blocks),
+            blocks: Cow::Borrowed(blocks),
             nblocks: nblocks
         })
     }
@@ -610,41 +619,6 @@ impl <'a> MapCore<'a> {
     }
 }
 
-/**
- * Compressed uniform static functions.
- * 
- * These objects work like [`CompressedMap`](crate::CompressedMap)s,
- * but they do not support arbitrary values as objects and do not
- * store their values.  Instead, they require the values to be integers
- * (or other objects implementing [`Into<u64>`](std::convert::Into) and
- * [`TryFrom<u64>`](std::convert::TryFrom)).
- * 
- * The design is efficient
- * if these integers are approximately uniformly random up to some bit size,
- * e.g. if they are random in `0..128`.  Unlike a [`CompressedMap`](crate::CompressedMap), a
- * [`CompressedRandomMap`] cannot take advantage of any bias in the distribution
- * of its values.
- *
- * [`CompressedRandomMap`] is building block for [`CompressedMap`](crate::CompressedMap).
- *
- * [`CompressedRandomMap`] doesn't implement [`Index`](core::ops::Index),
- * because it doesn't actually hold its values, so it can't return references
- * to them.
- */
-#[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Encode,Decode)]
-pub struct CompressedRandomMap<'a,K,V> {
-    /** Untyped map object, consulted after hashing. */
-    pub(crate) core: MapCore<'a>,
-
-    /** Phantom to hold the types of K,V */
-    _phantom: PhantomData<(K,V)>
-}
-
-impl <'a,K,V> Clone for CompressedRandomMap<'a,K,V> {
-    fn clone(&self) -> Self {
-        CompressedRandomMap { core: self.core.clone(), _phantom:PhantomData::default() }
-    }
-}
 
 /**
  * Approximate sets.
@@ -667,13 +641,22 @@ impl <'a,K,V> Clone for CompressedRandomMap<'a,K,V> {
  * Internally, an [`ApproxSet`] is just a [`CompressedRandomMap`]
  * which maps all the elements of the set to zero.
  */
-#[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Encode,Decode)]
+#[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Encode)]
 pub struct ApproxSet<'a,K> {
     /** Untyped map object, consulted after hashing. */
     core: MapCore<'a>,
 
     /** Phantom to hold the type of K */
     _phantom: PhantomData<K>,
+}
+
+impl <'a, 'de:'a, K> BorrowDecode<'de> for ApproxSet<'a,K> {
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        Ok(ApproxSet{
+            core: BorrowDecode::borrow_decode(decoder)?,
+            _phantom: PhantomData::default()
+        })
+    }
 }
 
 impl <'a,K> Clone for ApproxSet<'a,K> {
@@ -689,7 +672,7 @@ impl <'a,K> Clone for ApproxSet<'a,K> {
  * Implements `Default`, so you can get reasonable options
  * with `BuildOptions::default()`.
  */
-#[derive(Copy,Clone,PartialEq,Eq,Debug,Ord,PartialOrd,Encode,Decode)]
+#[derive(Copy,Clone,PartialEq,Eq,Debug,Ord,PartialOrd)]
 pub struct BuildOptions{
     /**
      * How many times to try building the set?
@@ -788,6 +771,42 @@ fn next_power_of_2_ge(x:usize) -> usize {
     1 << (usize::BITS - (x-1).leading_zeros())
 }
 
+/**
+ * Compressed uniform static functions.
+ * 
+ * These objects work like [`CompressedMap`](crate::CompressedMap)s,
+ * but they do not support arbitrary values as objects and do not
+ * store their values.  Instead, they require the values to be integers
+ * (or other objects implementing [`Into<u64>`](std::convert::Into) and
+ * [`TryFrom<u64>`](std::convert::TryFrom)).
+ * 
+ * The design is efficient
+ * if these integers are approximately uniformly random up to some bit size,
+ * e.g. if they are random in `0..128`.  Unlike a [`CompressedMap`](crate::CompressedMap), a
+ * [`CompressedRandomMap`] cannot take advantage of any bias in the distribution
+ * of its values.
+ *
+ * [`CompressedRandomMap`] is building block for [`CompressedMap`](crate::CompressedMap).
+ *
+ * [`CompressedRandomMap`] doesn't implement [`Index`](core::ops::Index),
+ * because it doesn't actually hold its values, so it can't return references
+ * to them.
+ */
+#[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Encode)]
+pub struct CompressedRandomMap<'a,K,V> {
+    /** Untyped map object, consulted after hashing. */
+    pub(crate) core: MapCore<'a>,
+
+    /** Phantom to hold the types of K,V */
+    _phantom: PhantomData<(K,V)>
+}
+
+impl <'a,K,V> Clone for CompressedRandomMap<'a,K,V> {
+    fn clone(&self) -> Self {
+        CompressedRandomMap { core: self.core.clone(), _phantom:PhantomData::default() }
+    }
+}
+
 impl <'a,K:Hash,V:Copy> CompressedRandomMap<'a,K,V>
 where Response:From<V> {
     /**
@@ -868,6 +887,25 @@ where Response:From<V> {
     where V:TryFrom<Response> {
         self.core.query_hash(key).try_into().ok()
     }
+
+    /**
+     * Take ownership, possibly copying the data.
+     *
+     * This is if you created the object using [`borrow_decode`], but want to
+     * own the data independently.
+     */
+    pub fn take_ownership<'b>(self) -> CompressedRandomMap<'b,K,V> {
+        CompressedRandomMap { core: own_core(self.core), _phantom:PhantomData::default() }
+    }
+}
+
+impl <'a, 'de:'a, K,V> BorrowDecode<'de> for CompressedRandomMap<'a,K,V> {
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        Ok(CompressedRandomMap{
+            core: BorrowDecode::borrow_decode(decoder)?,
+            _phantom: PhantomData::default()
+        })
+    }
 }
 
 impl <'a,K:Hash> ApproxSet<'a,K> {
@@ -933,6 +971,16 @@ impl <'a,K:Hash> ApproxSet<'a,K> {
      */
     pub fn probably_contains(&self, key: &K) -> bool {
         self.core.query_hash(key) == 0
+    }
+
+    /**
+     * Take ownership, possibly copying the data
+     *
+     * This is if you created the object using [`borrow_decode`], but want to
+     * own the data independently.
+     */
+    pub fn take_ownership<'b>(self) -> ApproxSet<'b,K> {
+        ApproxSet { core: own_core(self.core), _phantom:PhantomData::default() }
     }
 }
 

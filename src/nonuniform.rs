@@ -7,7 +7,7 @@
  */
 
 use crate::uniform::{MapCore,CompressedRandomMap,BuildOptions,
-    choose_key,BLOCKSIZE};
+    choose_key,own_core,BLOCKSIZE};
 use crate::tilematrix::bitset::{BitSet,BitSetIterator};
 use std::collections::HashMap;
 use core::marker::PhantomData;
@@ -15,10 +15,10 @@ use core::hash::Hash;
 use core::cmp::{min,max,Ord,Ordering};
 use core::ops::Index;
 
-use bincode::{Encode,Decode};
+use bincode::{Encode,Decode,BorrowDecode};
 use bincode::enc::{Encoder};
-use bincode::de::{Decoder};
-use bincode::de::read::Reader;
+use bincode::de::{BorrowDecoder};
+use bincode::de::read::{Reader,BorrowReader};
 use bincode::error::{EncodeError,DecodeError};
 use bincode::enc::write::Writer;
 
@@ -409,6 +409,23 @@ impl <'a,K:Hash,V> CompressedMap<'a,K,V> {
         
         unreachable!("CompressedRandomMap must have been constructed wrong; we should have a response by now")
     }
+    
+    /**
+     * Take ownership, possibly copying the data
+     *
+     * This is if you created the object using [`borrow_decode`], but want to
+     * own the data independently.
+     */
+    pub fn take_ownership<'b>(self) -> CompressedMap<'b,K,V> {
+        CompressedMap { 
+            plan: self.plan,
+            response_map: self.response_map,
+            salt: self.salt,
+            core: self.core.into_iter().map(own_core).collect(),
+            _phantom: PhantomData::default()
+
+        }
+    }
 }
 
 const MAGIC: &[u8;4] = b"cnm1";
@@ -447,8 +464,8 @@ impl <'a,K,V> Encode for CompressedMap<'a,K,V> where V: Encode {
     }
 }
 
-impl <'a,K,V> Decode for CompressedMap<'a,K,V> where V: Decode {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl <'a,'de:'a,K,V> BorrowDecode<'de> for CompressedMap<'a,K,V> where V: BorrowDecode<'de> {
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
         /* Decode the response map */
         fn err<Nope>(descr: &'static str) -> Result<Nope, DecodeError> {
             Err(DecodeError::OtherString(descr.to_string()))
@@ -462,7 +479,7 @@ impl <'a,K,V> Decode for CompressedMap<'a,K,V> where V: Decode {
         let log_responses : Vec<u8> = Decode::decode(decoder)?;
         let mut responses : Vec<V> = Vec::with_capacity(log_responses.len()+1);
         for _ in 0..log_responses.len()+1 {
-            responses.push(Decode::decode(decoder)?);
+            responses.push(BorrowDecode::borrow_decode(decoder)?);
         }
         let mut response_map = Vec::with_capacity(responses.len());
         let mut total : Locator = 0;
@@ -517,13 +534,12 @@ impl <'a,K,V> Decode for CompressedMap<'a,K,V> where V: Decode {
                 .ok_or(DecodeError::OtherString("overflow on multiply".to_string()))?;
 
             /* Read the blocks in straight */
-            let mut owned = vec![0u8; mul2];
-            decoder.reader().read(&mut owned)?;
+            let borrowed = decoder.borrow_reader().take_bytes(mul2)?;
             core.push( MapCore {
                 hash_key: hashcur,
                 bits_per_value: bpv as u8,
                 nblocks: nblocks,
-                blocks: Cow::Owned(owned)
+                blocks: Cow::Borrowed(borrowed)
             });
 
             /* update hash key according to salt */
