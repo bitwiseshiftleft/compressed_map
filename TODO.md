@@ -20,11 +20,9 @@
 
 # Longer term
 
+* Make production-quality (1.0).
 * no_std core for embedded systems
 * Armv7 and x86 support, with NEON / AVX2
-* Better interface for tile matrices
-* Complete multi-threading impl
-* Test on very large data sets (eg 1 billion; doesn't currently fit in memory)
-* Prove correctness
-* Once correctness is proved, it may give insights on optimal matrix shapes.
-* Make production-quality.
+* Better interface for tile matrices; release as its own crate?
+* Test on very large data sets (eg CompressedRandomMap with 1 billion entries; needs lots of memory to build)
+* Prove correctness; it may also give insights on optimal matrix shapes.

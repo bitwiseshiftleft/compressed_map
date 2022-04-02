@@ -1,5 +1,5 @@
 /*!
-Compressed mapping objects.
+Compressed mapping objects, also known as "static functions".
 
 This crate provides a [`CompressedMap<K, V>`] object, which operates
 somewhat like an immutable [`HashMap<K,V>`](std::collections::hash_map::HashMap):
@@ -31,6 +31,10 @@ extremely effectively.
 This crate's `CompressedMap` is about 40% smaller than the ones in CRLite.
 For a CRL in which 1% of certs are revoked, it uses about 1.1 bytes per
 revoked cert.
+
+There may be other use cases (malware databases? chess endgames??), but
+it's important to keep in mind that, when querying, you can't tell whether
+a key is in the map, and therefore whether you're getting garbage out.
 
 [`ApproxSet`] is more generally useful.  It operates much like static
 [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter), but it takes
