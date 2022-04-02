@@ -839,6 +839,7 @@ where Response:From<V> {
 
     /**
      * Query an item in the map.
+     *
      * If (key,v) was included when building the map, then v will be returned.
      * Otherwise, an arbitrary value will be returned.
      */
@@ -849,6 +850,7 @@ where Response:From<V> {
 
     /**
      * Query an item in the map.
+     *
      * If (key,v) was included when building the map, then v will be returned.
      * Otherwise, an arbitrary value will be returned.
      */
@@ -917,10 +919,7 @@ impl <K:Hash> ApproxSet<K> {
     /**
      * Query whether an item is in the set.
      *
-     * If `key` was included in the iterator when building the
-     * `ApproxSet`, then return `true`.  Otherwise, usually return `false`, but there is
-     * a small false positive rate depending on set construction parameters.  Queries,
-     * and thus false positives, are deterministic after the set has been constructed.
+     * There is a possibility of false positives, but not false negatives.
      */
     pub fn probably_contains(&self, key: &K) -> bool {
         self.core.query_hash(key) == 0

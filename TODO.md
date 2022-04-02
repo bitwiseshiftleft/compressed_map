@@ -1,17 +1,14 @@
-
 # Rust port
 
-* Use outer struct with AsRef, and eliminate MapCore?
-* Mark vectorized APIs as unsafe.
-* Decide on assert! / debug_assert! / nothing
+* Improve vector alignment in CompressedMap encode/decode.
+* Use outer struct with AsRef, and eliminate MapCore?  Enable mmap in this way??
 * C / C++ interface
 * Demo app
 * Examples in doc
-* Convenienc methods for file handling
+* Convenience methods, at least, for file handling
 * Make sure it builds with AVX2 when possible
 * Distinguish between "out of memory", "can't create thread" etc, and "matrix is not invertible"
-* Deal with overflow cases with billions of items in nonuniform maps.
-* Multithread hashing even if bucketsort isn't multithreaded.
+* Deal with overflow cases with billions of items in nonuniform maps, where 0 rounds up to 1.
 
 ## Rust performance:
 
@@ -22,9 +19,10 @@ but more cache-friendly.  This results in a slower uniform map solver
 on M1 and a wash on Intel.
 
 The Rust nonuniform map code is simpler and faster, so it is faster
-everywhere.
+everywhere vs C.
 
-The threaded version still isn't very optimized.
+The threaded version still isn't very optimized.  We could multithread
+hashing, even if bucketsort isn't multithreaded.
 
 Pseudoinverse is still unoptimized and should be improved.
     

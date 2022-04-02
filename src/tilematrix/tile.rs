@@ -101,16 +101,16 @@ impl Tile {
     /** Permute our columns in place */
     pub fn mut_permute_columns(&mut self, perm: &Permutation) {
         #[cfg(target_arch="x86_64")]
-        if vectorized_avx2::is_available() {
+        if vectorized_avx2::is_available() { unsafe {
             vectorized_avx2::mut_permute_columns(self,perm);
             return ();
-        }
+        }}
 
         #[cfg(target_arch="aarch64")]
-        if vectorized_neon::is_available() {
+        if vectorized_neon::is_available() { unsafe {
             vectorized_neon::mut_permute_columns(self,perm);
             return ();
-        }
+        }}
 
         scalar_core::mut_permute_columns(self,perm);
     }
@@ -130,14 +130,14 @@ impl Tile {
     /** Compose permutations */
     pub fn compose_permutations(perm1: &Permutation, perm2: &Permutation) -> Permutation {
         #[cfg(target_arch="x86_64")]
-        if vectorized_avx2::is_available() {
+        if vectorized_avx2::is_available() { unsafe {
             return vectorized_avx2::compose_permutations(perm1,perm2);
-        }
+        }}
 
         #[cfg(target_arch="aarch64")]
-        if vectorized_neon::is_available() {
+        if vectorized_neon::is_available() { unsafe {
             return vectorized_neon::compose_permutations(perm1,perm2);
-        }
+        }}
 
         scalar_core::compose_permutations(perm1,perm2)
     }
@@ -523,81 +523,76 @@ mod vectorized_avx2 {
      * ops on neon, but possibly not on AVX2
      */
     #[inline(always)]
-    pub fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
-        unsafe {
-            let addr = permutation as *const u8 as *const __m128i;
-            let vperm = _mm256_loadu2_m128i(addr,addr);
-            let ab = _mm256_loadu_si256(&t.storage[0] as *const u64 as *const __m256i);
-            let ab = _mm256_shuffle_epi8(ab,vperm);
-            _mm256_storeu_si256(&mut t.storage[0] as *mut u64 as *mut __m256i, ab);
-        }
+    pub unsafe fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
+        let addr = permutation as *const u8 as *const __m128i;
+        let vperm = _mm256_loadu2_m128i(addr,addr);
+        let ab = _mm256_loadu_si256(&t.storage[0] as *const u64 as *const __m256i);
+        let ab = _mm256_shuffle_epi8(ab,vperm);
+        _mm256_storeu_si256(&mut t.storage[0] as *mut u64 as *mut __m256i, ab);
     }
 
     #[inline(always)]
-    pub fn compose_permutations(perm1:&Permutation, perm2:&Permutation) -> Permutation {
-        unsafe {
-            let mut ret:Permutation = PERMUTE_ALL_ZERO;
-            let z = _mm_set1_epi8(PERMUTE_ZERO as i8);
-            let vperm1 = _mm_loadu_si128(perm1 as *const u8 as *const __m128i);
-            let vperm2 = _mm_loadu_si128(perm2 as *const u8 as *const __m128i);
-            let vperm12 = _mm_xor_si128(z,_mm_shuffle_epi8(_mm_xor_si128(z,vperm2),vperm1));
-            _mm_storeu_si128(&mut ret[0] as *mut u8 as *mut __m128i, vperm12);
-            ret
-        }
+    pub unsafe fn compose_permutations(perm1:&Permutation, perm2:&Permutation) -> Permutation {
+        let mut ret:Permutation = PERMUTE_ALL_ZERO;
+        let z = _mm_set1_epi8(PERMUTE_ZERO as i8);
+        let vperm1 = _mm_loadu_si128(perm1 as *const u8 as *const __m128i);
+        let vperm2 = _mm_loadu_si128(perm2 as *const u8 as *const __m128i);
+        let vperm12 = _mm_xor_si128(z,_mm_shuffle_epi8(_mm_xor_si128(z,vperm2),vperm1));
+        _mm_storeu_si128(&mut ret[0] as *mut u8 as *mut __m128i, vperm12);
+        ret
     }
 
     /** Precompute multiples of a tile in order to speed up vectorized multiplication */
     #[inline(always)]
-    pub fn compile_mul_table(t:Tile) -> MulTable {
-        unsafe {
-            let mut abcd = _mm256_loadu_si256(&t.storage[0] as *const u64 as *const __m256i);
-            let index = _mm256_set_epi64x(0x0F0E0D0C0B0A0908,0x0706050403020100,
-                                          0x0F0E0D0C0B0A0908,0x0706050403020100);
-            let lane0 = _mm256_setzero_si256();
-            let lane4 = _mm256_set1_epi8(4);
-            let lane8 = _mm256_set1_epi8(8);
-            let lane12 = _mm256_set1_epi8(12);
-            let mut one  = _mm256_set1_epi8(1);
-            let mut aclo = _mm256_setzero_si256();
-            let mut achi = _mm256_setzero_si256();
-            let mut bdlo = _mm256_setzero_si256();
-            let mut bdhi = _mm256_setzero_si256();
-            for _ in 0..4 {
-                let tlo = _mm256_cmpeq_epi8(_mm256_and_si256(index,  one), one);
-                one  = _mm256_slli_epi16(one,1);
-                aclo = _mm256_xor_si256(aclo,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane0),tlo));
-                achi = _mm256_xor_si256(achi,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane4),tlo));
-                bdlo = _mm256_xor_si256(bdlo,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane8),tlo));
-                bdhi = _mm256_xor_si256(bdhi,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane12),tlo));
-                abcd = _mm256_srli_epi64(abcd,8);
-            }
-            let adlo = _mm256_permute2x128_si256(aclo,bdlo,0x30);
-            let adhi = _mm256_permute2x128_si256(achi,bdhi,0x30);
-            let cblo = _mm256_permute2x128_si256(aclo,bdlo,0x21);
-            let cbhi = _mm256_permute2x128_si256(achi,bdhi,0x21);
-            MulTable { table : [ adlo, adhi, cblo, cbhi ] }
+    pub unsafe fn compile_mul_table(t:Tile) -> MulTable {
+        let mut abcd = _mm256_loadu_si256(&t.storage[0] as *const u64 as *const __m256i);
+        let index = _mm256_set_epi64x(0x0F0E0D0C0B0A0908,0x0706050403020100,
+                                        0x0F0E0D0C0B0A0908,0x0706050403020100);
+        let lane0 = _mm256_setzero_si256();
+        let lane4 = _mm256_set1_epi8(4);
+        let lane8 = _mm256_set1_epi8(8);
+        let lane12 = _mm256_set1_epi8(12);
+        let mut one  = _mm256_set1_epi8(1);
+        let mut aclo = _mm256_setzero_si256();
+        let mut achi = _mm256_setzero_si256();
+        let mut bdlo = _mm256_setzero_si256();
+        let mut bdhi = _mm256_setzero_si256();
+        for _ in 0..4 {
+            let tlo = _mm256_cmpeq_epi8(_mm256_and_si256(index,  one), one);
+            one  = _mm256_slli_epi16(one,1);
+            aclo = _mm256_xor_si256(aclo,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane0),tlo));
+            achi = _mm256_xor_si256(achi,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane4),tlo));
+            bdlo = _mm256_xor_si256(bdlo,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane8),tlo));
+            bdhi = _mm256_xor_si256(bdhi,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane12),tlo));
+            abcd = _mm256_srli_epi64(abcd,8);
         }
+        let adlo = _mm256_permute2x128_si256(aclo,bdlo,0x30);
+        let adhi = _mm256_permute2x128_si256(achi,bdhi,0x30);
+        let cblo = _mm256_permute2x128_si256(aclo,bdlo,0x21);
+        let cbhi = _mm256_permute2x128_si256(achi,bdhi,0x21);
+        MulTable { table : [ adlo, adhi, cblo, cbhi ] }
     }
 
     impl Mul<Tile> for MulTable {
         type Output = Tile;
+        /* Can't record unsafe on the trait impl.  Make sure we have avx2 before using */
         #[inline(always)]
         fn mul(self, tv: Tile) -> Tile {
-            let mut ret = [0u64; STORAGE_PER];
             unsafe {
+                let mut ret = [0u64; STORAGE_PER];
                 let low_nibble = _mm256_set1_epi8(0xF);
                 let vec = _mm256_loadu_si256(&tv.storage[0] as *const u64 as  *const __m256i);
                 let veclo = _mm256_and_si256(vec, low_nibble);
                 let vechi = _mm256_and_si256(_mm256_srli_epi16(vec,4), low_nibble);
                 let [adlo,adhi,cblo,cbhi] = self.table;
                 let ad = _mm256_xor_si256(_mm256_shuffle_epi8(adlo, veclo),
-                                          _mm256_shuffle_epi8(adhi, vechi));
+                                            _mm256_shuffle_epi8(adhi, vechi));
                 let cb = _mm256_xor_si256(_mm256_shuffle_epi8(cblo, veclo),
-                                          _mm256_shuffle_epi8(cbhi, vechi));
+                                            _mm256_shuffle_epi8(cbhi, vechi));
                 let vret = _mm256_xor_si256(_mm256_permute2x128_si256(cb,cb,1), ad);
                 _mm256_storeu_si256(&mut ret[0] as *mut u64 as *mut __m256i, vret);
+                Tile { storage : ret }
             }
-            Tile { storage : ret }
         }
     }
 }
@@ -626,85 +621,85 @@ mod vectorized_neon {
      * PERF: adding a permute2 would improve performance for certain column
      * ops on neon, but possibly not on AVX2
      */
-    pub fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
-        unsafe {
-            let vperm = vld1q_u8(permutation as *const u8);
-            let ab = vreinterpretq_u8_u64(vld1q_u64(&t.storage[0] as *const u64));
-            let cd = vreinterpretq_u8_u64(vld1q_u64(&t.storage[2] as *const u64));
-            let ab = vqtbl1q_u8(ab, vperm);
-            let cd = vqtbl1q_u8(cd, vperm);
-            vst1q_u64(&mut t.storage[0] as *mut u64, vreinterpretq_u64_u8(ab));
-            vst1q_u64(&mut t.storage[2] as *mut u64, vreinterpretq_u64_u8(cd));
-        }
+    pub unsafe fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
+        let vperm = vld1q_u8(permutation as *const u8);
+        let ab = vreinterpretq_u8_u64(vld1q_u64(&t.storage[0] as *const u64));
+        let cd = vreinterpretq_u8_u64(vld1q_u64(&t.storage[2] as *const u64));
+        let ab = vqtbl1q_u8(ab, vperm);
+        let cd = vqtbl1q_u8(cd, vperm);
+        vst1q_u64(&mut t.storage[0] as *mut u64, vreinterpretq_u64_u8(ab));
+        vst1q_u64(&mut t.storage[2] as *mut u64, vreinterpretq_u64_u8(cd));
     }
 
-    pub fn compose_permutations(perm1:&Permutation, perm2:&Permutation) -> Permutation {
-        unsafe {
-            let mut ret:Permutation = PERMUTE_ALL_ZERO;
-            let vall   = vdupq_n_u8(PERMUTE_ZERO);
-            let vperm1 = vld1q_u8(perm1 as *const u8);
-            let vperm2 = vld1q_u8(perm2 as *const u8);
-            vst1q_u8(&mut ret[0] as *mut u8, veorq_u8(vall,vqtbl1q_u8(veorq_u8(vall,vperm2),vperm1)));
-            ret
-        }
+    pub unsafe fn compose_permutations(perm1:&Permutation, perm2:&Permutation) -> Permutation {
+        let mut ret:Permutation = PERMUTE_ALL_ZERO;
+        let vall   = vdupq_n_u8(PERMUTE_ZERO);
+        let vperm1 = vld1q_u8(perm1 as *const u8);
+        let vperm2 = vld1q_u8(perm2 as *const u8);
+        vst1q_u8(&mut ret[0] as *mut u8, veorq_u8(vall,vqtbl1q_u8(veorq_u8(vall,vperm2),vperm1)));
+        ret
     }
 
     /** Precompute multiples of a tile in order to speed up vectorized multiplication */
-    pub fn compile_mul_table(t:Tile) -> MulTable {
-        unsafe {
-            let mut ab = vld1q_u64(&t.storage[0] as *const u64);
-            let mut cd = vld1q_u64(&t.storage[2] as *const u64);
-            let index_low = vcombine_u8(vcreate_u8(0x0706050403020100),vcreate_u8(0x0F0E0D0C0B0A0908));
-            let mut one  = vdupq_n_u8(1);
-            let mut low0  = vdupq_n_u8(0);
-            let mut high0 = vdupq_n_u8(0);
-            let mut low1  = vdupq_n_u8(0);
-            let mut high1 = vdupq_n_u8(0);
-            let mut low2  = vdupq_n_u8(0);
-            let mut high2 = vdupq_n_u8(0);
-            let mut low3  = vdupq_n_u8(0);
-            let mut high3 = vdupq_n_u8(0);
-            for _ in 0..4 {
-                let tlo = vceqq_u8(vandq_u8(index_low,  one), one);
-                one = vshlq_n_u8(one,1);
-                low0  = veorq_u8(low0,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),0),tlo));
-                high0 = veorq_u8(high0, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),4),tlo));
-                low1  = veorq_u8(low1,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),8),tlo));
-                high1 = veorq_u8(high1, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),12),tlo));
-                ab = vshrq_n_u64(ab,8);
-                low2  = veorq_u8(low2,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),0),tlo));
-                high2 = veorq_u8(high2, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),4),tlo));
-                low3  = veorq_u8(low3,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),8),tlo));
-                high3 = veorq_u8(high3, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),12),tlo));
-                cd = vshrq_n_u64(cd,8);
-            }
-            MulTable { table : [ (low0,high0),(low1,high1),(low2,high2),(low3,high3) ] }
+    pub unsafe fn compile_mul_table(t:Tile) -> MulTable {
+        let mut ab = vld1q_u64(&t.storage[0] as *const u64);
+        let mut cd = vld1q_u64(&t.storage[2] as *const u64);
+        let index_low = vcombine_u8(vcreate_u8(0x0706050403020100),vcreate_u8(0x0F0E0D0C0B0A0908));
+        let mut one  = vdupq_n_u8(1);
+        let mut low0  = vdupq_n_u8(0);
+        let mut high0 = vdupq_n_u8(0);
+        let mut low1  = vdupq_n_u8(0);
+        let mut high1 = vdupq_n_u8(0);
+        let mut low2  = vdupq_n_u8(0);
+        let mut high2 = vdupq_n_u8(0);
+        let mut low3  = vdupq_n_u8(0);
+        let mut high3 = vdupq_n_u8(0);
+        for _ in 0..4 {
+            let tlo = vceqq_u8(vandq_u8(index_low,  one), one);
+            one = vshlq_n_u8(one,1);
+            low0  = veorq_u8(low0,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),0),tlo));
+            high0 = veorq_u8(high0, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),4),tlo));
+            low1  = veorq_u8(low1,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),8),tlo));
+            high1 = veorq_u8(high1, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),12),tlo));
+            ab = vshrq_n_u64(ab,8);
+            low2  = veorq_u8(low2,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),0),tlo));
+            high2 = veorq_u8(high2, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),4),tlo));
+            low3  = veorq_u8(low3,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),8),tlo));
+            high3 = veorq_u8(high3, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),12),tlo));
+            cd = vshrq_n_u64(cd,8);
         }
+        MulTable { table : [ (low0,high0),(low1,high1),(low2,high2),(low3,high3) ] }
     }
 
     impl Mul<Tile> for MulTable {
         type Output = Tile;
+        /* Can't record unsafe on the trait impl.
+         *
+         * This is unsafe in that we might not have NEON, though that can't happen
+         * on any existing AArch64 machines I'm aware of.  Once this is ported to
+         * Armv7, make sure to check that this module is available before using.
+         */
         fn mul(self, tv: Tile) -> Tile {
-            let mut ret = [0u64; STORAGE_PER];
             unsafe {
+                let mut ret = [0u64; STORAGE_PER];
                 let low_nibble = vdupq_n_u8(0xF);
                 let ab = vreinterpretq_u8_u64(vld1q_u64(&tv.storage[0] as *const u64));
                 let cd = vreinterpretq_u8_u64(vld1q_u64(&tv.storage[2] as *const u64));
                 let [(elo,ehi),(flo,fhi),(glo,ghi),(hlo,hhi)] = self.table;
                 let ij = veorq_u8(vqtbl1q_u8(elo, vandq_u8(ab,low_nibble)),
-                                  vqtbl1q_u8(ehi, vshrq_n_u8(ab,4)));
+                                    vqtbl1q_u8(ehi, vshrq_n_u8(ab,4)));
                 let ij = veorq_u8(ij,
-                         veorq_u8(vqtbl1q_u8(flo, vandq_u8(cd,low_nibble)),
-                                  vqtbl1q_u8(fhi, vshrq_n_u8(cd,4))));
+                            veorq_u8(vqtbl1q_u8(flo, vandq_u8(cd,low_nibble)),
+                                    vqtbl1q_u8(fhi, vshrq_n_u8(cd,4))));
                 let kl = veorq_u8(vqtbl1q_u8(glo, vandq_u8(ab,low_nibble)),
-                                  vqtbl1q_u8(ghi, vshrq_n_u8(ab,4)));
+                                    vqtbl1q_u8(ghi, vshrq_n_u8(ab,4)));
                 let kl = veorq_u8(kl,
-                         veorq_u8(vqtbl1q_u8(hlo, vandq_u8(cd,low_nibble)),
-                                  vqtbl1q_u8(hhi, vshrq_n_u8(cd,4))));
+                            veorq_u8(vqtbl1q_u8(hlo, vandq_u8(cd,low_nibble)),
+                                    vqtbl1q_u8(hhi, vshrq_n_u8(cd,4))));
                 vst1q_u64(&mut ret[0] as *mut u64, vreinterpretq_u64_u8(ij));
                 vst1q_u64(&mut ret[2] as *mut u64, vreinterpretq_u64_u8(kl));
+                Tile { storage : ret }
             }
-            Tile { storage : ret }
         }
     }
 }
@@ -718,18 +713,18 @@ pub fn row_mul_acc(c:&mut [Tile], a:Tile, b:&[Tile]) {
     let len = min(b.len(),c.len());
     if !a.is_zero() {
         #[cfg(target_arch="x86_64")]
-        if vectorized_avx2::is_available() {
+        if vectorized_avx2::is_available() { unsafe {
             let a_study = vectorized_avx2::compile_mul_table(a);
             for i in 0..len { c[i] ^= a_study * b[i]; }
             return ();
-        }
+        }}
 
         #[cfg(target_arch="aarch64")]
-        if vectorized_neon::is_available() {
+        if vectorized_neon::is_available() { unsafe {
             let a_study = vectorized_neon::compile_mul_table(a);
             for i in 0..len { c[i] ^= a_study * b[i]; }
             return ();
-        }
+        }}
 
         for i in 0..len { c[i] ^= a * b[i]; }
     }
@@ -741,18 +736,18 @@ pub fn row_mul(a:Tile, b:&mut [Tile]) {
         for i in 0..b.len() { b[i] = Tile::ZERO; }
     } else {
         #[cfg(target_arch="x86_64")]
-        if vectorized_avx2::is_available() {
+        if vectorized_avx2::is_available() { unsafe {
             let a_study = vectorized_avx2::compile_mul_table(a);
             for i in 0..b.len() { b[i] = a_study * b[i]; }
             return ();
-        }
+        }}
 
         #[cfg(target_arch="aarch64")]
-        if vectorized_neon::is_available() {
+        if vectorized_neon::is_available() { unsafe {
             let a_study = vectorized_neon::compile_mul_table(a);
             for i in 0..b.len() { b[i] = a_study * b[i]; }
             return ();
-        }
+        }}
 
         for i in 0..b.len() { b[i] = a * b[i]; }
     }
@@ -774,18 +769,18 @@ pub fn bulk_swap_rows(a: &mut [Tile], ra:Index, rb:Index, nrows: usize) {
     op.mut_swap_cols(rb,ra,nrows); // swapping rows of id is the same as swapping columns
 
     #[cfg(target_arch="x86_64")]
-    if vectorized_avx2::is_available() {
+    if vectorized_avx2::is_available() { unsafe {
         let study = vectorized_avx2::compile_mul_table(op);
         for i in 0..a.len() { a[i] = study * a[i]; }
         return ();
-    }
+    }}
 
     #[cfg(target_arch="aarch64")]
-    if vectorized_neon::is_available() {
+    if vectorized_neon::is_available() { unsafe {
         let study = vectorized_neon::compile_mul_table(op);
         for i in 0..a.len() { a[i] = study * a[i]; }
         return ();
-    }
+    }}
 
     for i in 0..a.len() { a[i] = op * a[i]; }
 }
@@ -876,20 +871,20 @@ mod tests {
     fn vectorized() {
         for _ in 0..100 {
             #[cfg(target_arch="x86_64")]
-            if vectorized_avx2::is_available() {
+            if vectorized_avx2::is_available() { unsafe {
                 let t = random_tile();
                 let u = random_tile();
                 let s = vectorized_avx2::compile_mul_table(t);
                 assert_eq!(s*u,t*u);
-            }
+            }}
 
             #[cfg(target_arch="aarch64")]
-            if vectorized_neon::is_available() {
+            if vectorized_neon::is_available() { unsafe {
                 let t = random_tile();
                 let u = random_tile();
                 let s = vectorized_neon::compile_mul_table(t);
                 assert_eq!(s*u,t*u);
-            }
+            }}
         }
     }
 
@@ -985,14 +980,14 @@ mod tests {
 
 
                 #[cfg(target_arch="x86_64")]
-                if vectorized_avx2::is_available() {
+                if vectorized_avx2::is_available() { unsafe {
                     assert_eq!((t*&p)*&q, t*&vectorized_avx2::compose_permutations(&q,&p));
-                }
+                }}
 
                 #[cfg(target_arch="aarch64")]
-                if vectorized_neon::is_available() {
+                if vectorized_neon::is_available() { unsafe {
                     assert_eq!((t*&p)*&q, t*&vectorized_neon::compose_permutations(&q,&p));
-                }
+                }}
                 assert_eq!((t*&p)*&q, t*&scalar_core::compose_permutations(&q,&p));
             }
         }

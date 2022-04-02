@@ -140,7 +140,7 @@
  * nearly arbitrary values, and represents those value, it does rely on these traits for
  * `V`.
  *
- * TODO: Provide [`BorrowDecode`](bincode::dec::BorrowDecode).
+ * TODO: Provide [`BorrowDecode`](bincode::de::BorrowDecode).
  * TODO: should they be u32's at all?  What about BorrowDecode?
  * 
  * # Internals
