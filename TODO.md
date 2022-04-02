@@ -1,39 +1,29 @@
-# Rust port
+# Ser/deser
 
+* Add a version number to bincode deser
+* Check that bincode deser looks sane
+* Replace the length check with just encoding
 * Improve vector alignment in CompressedMap encode/decode.
+* Stabilize interface and format
+
+# Other release items
+
 * Use outer struct with AsRef, and eliminate MapCore?  Enable mmap in this way??
-* C / C++ interface
+* C / C++ interface / dynamic lib
 * Demo app
 * Examples in doc
 * Convenience methods, at least, for file handling
-* Make sure it builds with AVX2 when possible
+* Make sure it builds automatically with AVX2 when possible
 * Distinguish between "out of memory", "can't create thread" etc, and "matrix is not invertible"
 * Deal with overflow cases with billions of items in nonuniform maps, where 0 rounds up to 1.
 
-## Rust performance:
+# Performance
 
-The Rust version has performance tradeoffs vs C.  Overall, the Rust
-matrix solvers are faster for large matrices, especially on Intel,
-and the row rearrangement (interleave_rows/partition_rows) is slower
-but more cache-friendly.  This results in a slower uniform map solver
-on M1 and a wash on Intel.
-
-The Rust nonuniform map code is simpler and faster, so it is faster
-everywhere vs C.
-
-The threaded version still isn't very optimized.  We could multithread
-hashing, even if bucketsort isn't multithreaded.
-
-Pseudoinverse is still unoptimized and should be improved.
-    
-# For release
-
-* Detect vector acceleration instead of compiling it in fixed
-* Stabilize interface and format
-
-## Testing and documentation
-
-* Test various things with zero allowed tries, zero items, zero value bits, etc.
+* Multithread hashing even if we aren't multithreading bucketsort.  (Using Rayon??)
+* Improve optimization of the threaded version
+* Improve pseudoinverse
+* More profile-driven optimization
+* Compare which parts are still faster in C
 
 ## API / included features
 
@@ -43,9 +33,9 @@ Pseudoinverse is still unoptimized and should be improved.
 # Longer term
 
 * no_std core for embedded systems
-* Armv7 and x86 support
+* Armv7 and x86 support, with NEON / AVX2
 * Better interface for tile matrices
-* Complete multi-threading
+* Complete multi-threading impl
 * Test on very large data sets (eg 1 billion; doesn't currently fit in memory)
 * Prove correctness
 * Once correctness is proved, it may give insights on optimal matrix shapes.
