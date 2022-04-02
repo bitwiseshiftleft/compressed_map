@@ -74,14 +74,14 @@ you can control it using the `bits_per_value` field in [`BuildOptions`].
 
 [`ApproxSet`] and [`CompressedRandomMap`] use approximately `bits_per_value` bits per entry
 in the map.  By default, this is 8 bits for [`ApproxSet`], and the maximum bit-length of
-any input for [`CompressedRandomMap`].
+any value in the map for [`CompressedRandomMap`].
 
 [`CompressedMap`] uses approximately H<sub>0</sub>(V) * (1+overhead) bits per entry.
 Here H<sub>0</sub>(V) is
 the [Shannon entropy](https://en.wikipedia.org/wiki/Entropy_(information_theory)) of the
 distribution of values --- e.g. it is 1 for a map whose values
 are (50% `true`, 50% `false`), and 0.081 for a map that's (1% `true`, 99% `false`).  The
-overhead is 0.001 to 0.11 = 0.1% to 11%, depending on the distribution: it's worst for maps
+overhead is 0.001 to 0.11 (i.e. 0.1% to 11%), depending on the distribution: it's worst for maps
 that split about 80%/20%.
  
 [`CompressedMap`] also stores a table of possible values; internally it is compressing an
@@ -174,9 +174,10 @@ nearly arbitrary values, and represents those value, it does rely on these trait
 
 Internally, [`CompressedRandomMap`] is implemented as a "frayed ribbon filter".  This is
 a matrix `M`, such that `F(k) = M * encode(hash(k)) ^ hash(k)` for each key `k`
-in the map.   The encoding of hashes into vectors chooses two blocks, according to a
-distribution that usually places them near to each other; within the blocks the vector
-is pseudorandom (according to the hash), and elsewhere it is zero.
+in the map.   The encoding of hashes into vectors chooses two 32-bit blocks with random
+contents, according to a distribution that usually places them near to each other;
+within the blocks the vector is pseudorandom (according to the hash), and elsewhere
+it is zero.
 
 The building process involves solving the linear system constrained by
 `M * encode(hash(k)) ^ hash(k) = v` for all `(k,v)` in the map.  This can be done
@@ -187,7 +188,7 @@ a pseudorandom offset, the false positive probability is 2<sup>`-bits_per_value`
 without that offset, there would be a danger that e.g. the all-zeros kernel vector might
 be chosen, which would have a false positive probability of 1.
 
-A [`CompressedMap`] is implemented by choosing an `i32` "`Locator`" according to
+A [`CompressedMap`] is implemented by choosing an `i32` "Locator" according to
 several [`CompressedRandomMap`]s.  Each possible output is assigned a naturally aligned
 interval in `0..2`<sup>`32`</sup>, and if the locator is in that interval that value is the output.
 The individual maps are generated including only the `(key, value)` pairs that are required

@@ -987,7 +987,7 @@ impl <'a,K:Hash> ApproxSet<'a,K> {
 }
 
 use bincode::config::*;
-/** Configuration to be used to encode / decode maps to binary file format */
+/** Configuration to be used to encode / decode maps to binary file format. */
 pub const STD_BINCODE_CONFIG : Configuration<LittleEndian,Fixint,SkipFixedArrayLength,NoLimit>
     = bincode::config::standard()
     .with_little_endian()
