@@ -6,8 +6,7 @@
  * Nonuniform sparse linear map implementation.
  */
 
-use crate::uniform::{MapCore,CompressedRandomMap,
-    LfrBlock,BuildOptions,choose_key,decode_map_core};
+use crate::uniform::{MapCore,CompressedRandomMap,BuildOptions,choose_key,decode_map_core};
 use crate::tilematrix::bitset::{BitSet,BitSetIterator};
 use std::collections::HashMap;
 use core::marker::PhantomData;
@@ -400,15 +399,6 @@ impl <K:Hash+Eq+Sync,V:Hash+Ord+Clone> CompressedMap<K,V> {
         
         unreachable!("CompressedRandomMap must have been constructed wrong; we should have a response by now")
     }
-
-    /** Return the size of core storage, in bytes */
-    pub fn core_size(&self) -> usize {
-        let mut ret = 0;
-        for ph in &self.core {
-            ret += ph.blocks.len();
-        }
-        (ret * LfrBlock::BITS as usize) / 8
-    }
 }
 
 /* TODO: shouldn't need clone for this */
@@ -427,7 +417,7 @@ impl <K,V> Encode for CompressedMap<K,V> where V: Encode+Clone {
         };
 
         /* TODO: don't clone */
-        let core : Vec<Vec<u32>> = self.core.clone().into_iter().map(|umap| umap.blocks).collect();
+        let core : Vec<Vec<u8>> = self.core.clone().into_iter().map(|umap| umap.blocks).collect();
 
         /* TODO: before we standardize the file format */
         Encode::encode(&hash_key, encoder)?;
@@ -453,7 +443,7 @@ impl <K,V> Decode for CompressedMap<K,V> where V: Decode {
         for _ in 0..log_responses.len()+1 {
             responses.push(Decode::decode(decoder)?);
         }
-        let dec_core : Vec<Vec<LfrBlock>> = Decode::decode(decoder)?;
+        let dec_core : Vec<Vec<u8>> = Decode::decode(decoder)?;
 
         fn err<Nope>(descr: &'static str) -> Result<Nope, DecodeError> {
             Err(DecodeError::OtherString(descr.to_string()))

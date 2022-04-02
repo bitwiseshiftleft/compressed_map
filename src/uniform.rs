@@ -365,24 +365,24 @@ pub(crate) struct MapCore {
     pub nblocks: usize,
 
     /** The block data itself */
-    pub(crate) blocks: Vec<LfrBlock>,
+    pub(crate) blocks: Vec<u8>,
 }
 
 /** Decoding steps to figure out nblocks */
 pub(crate) fn decode_map_core(
     hash_key: HasherKey,
     bits_per_value: u8,
-    blocks: Vec<LfrBlock>
+    blocks: Vec<u8>
 ) -> Result<MapCore, &'static str> {
     let nblocks = if bits_per_value == 0 {
         if blocks.len() != 0 { return Err("can't have blocks if bits_per_value==0"); }
         2
     } else if bits_per_value > Response::BITS as u8 {
         return Err("can't have have more than Response::BITS per value");
-    } else if blocks.len() % bits_per_value as usize != 0 {
+    } else if blocks.len() % (BLOCKSIZE * bits_per_value as usize) as usize != 0 {
         return Err("bits_per_value must evenly divide blocks.len()");
     } else {
-        blocks.len() / bits_per_value as usize
+        blocks.len() / (BLOCKSIZE * bits_per_value as usize) as usize
     };
     if nblocks < 2 {
         Err("must have nblocks >= 2")
@@ -559,17 +559,19 @@ impl MapCore {
         }
 
         /* Serialize to core */
-        let mut core = vec![0; naug*nblocks];
+        let mut core = vec![0u8; naug*nblocks*BLOCKSIZE];
         for blki in 0..nblocks {
             let bsol = block_groups[2*blki+1].bwd_solution.ctake().unwrap();
             debug_assert_eq!(bsol.rows, BLOCKSIZE*8);
             for aug in 0..naug {
-                let mut word = 0;
-                /* PERF: this could be faster, but do we care? */
-                for bit in 0..LfrBlock::BITS {
-                    word |= (bsol.get_aug_bit(bit as usize,aug) as LfrBlock) << bit;
+                for byteoff in 0..BLOCKSIZE {
+                    let mut byte = 0;
+                    /* PERF: this could be faster, but do we care? */
+                    for bit in 0..u8::BITS {
+                        byte |= (bsol.get_aug_bit(byteoff*8 + bit as usize,aug) as u8) << bit;
+                    }
+                    core[(blki*naug+aug)*BLOCKSIZE+byteoff] = byte;
                 }
-                core[blki*naug+aug] = word;
             }
         }
 
@@ -587,12 +589,16 @@ impl MapCore {
         if self.bits_per_value < Response::BITS as u8 {
             ret &= (1<<self.bits_per_value) - 1;
         }
-        let p0 = row.block_positions[0] as usize;
-        let p1 = row.block_positions[1] as usize;
-        let [k0,k1] = row.block_key;
         let naug = self.bits_per_value as usize;
+        let p0 = BLOCKSIZE * naug * row.block_positions[0] as usize;
+        let p1 = BLOCKSIZE * naug * row.block_positions[1] as usize;
+        let [k0,k1] = row.block_key;
+        let p0_bytes = &self.blocks[p0 .. p0+BLOCKSIZE*naug];
+        let p1_bytes = &self.blocks[p1 .. p1+BLOCKSIZE*naug];
         for bit in 0..naug {
-            let get = (self.blocks[p0*naug+bit] & k0) ^ (self.blocks[p1*naug+bit] & k1);
+            /* Hopefully this all compiles to just a block access for p0 and for p1 */
+            let get = (LfrBlock::from_le_bytes((&p0_bytes[bit*BLOCKSIZE..(bit+1)*BLOCKSIZE]).try_into().unwrap()) & k0)
+                    ^ (LfrBlock::from_le_bytes((&p1_bytes[bit*BLOCKSIZE..(bit+1)*BLOCKSIZE]).try_into().unwrap()) & k1);
             ret ^= ((get.count_ones() & 1) as Response) << bit;
         }
         ret

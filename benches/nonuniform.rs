@@ -1,5 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use compressed_map::{CompressedMap,BuildOptions};
+use compressed_map::{CompressedMap,BuildOptions,STD_BINCODE_CONFIG};
+use bincode::{encode_to_vec};
 use rand::{Rng,SeedableRng};
 use rand::rngs::StdRng;
 use std::collections::HashMap;
@@ -9,6 +10,7 @@ criterion_group!{
     config = Criterion::default().sample_size(10);
     targets = criterion_benchmark
 }
+
 fn criterion_benchmark(crit: &mut Criterion) {
     let no = 100000000;
     let yes  = 700000;
@@ -37,7 +39,7 @@ fn criterion_benchmark(crit: &mut Criterion) {
         let p = yes as f64 / (yes + no) as f64;
         let shannon = -(p * p.log2() + (1.-p)*(1.-p).log2());
         let shannon = (shannon * (yes + no) as f64 / 8.) as usize;
-        let size = umap_some.core_size();
+        let size = encode_to_vec(&umap_some, STD_BINCODE_CONFIG).unwrap().len();
         println!("Shannon = {}, size = {}, ratio = {}",
             shannon,
             size,
