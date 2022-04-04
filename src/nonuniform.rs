@@ -7,7 +7,7 @@
  */
 
 use crate::uniform::{MapCore,CompressedRandomMap,BuildOptions,
-    choose_key,BLOCKSIZE,STD_BINCODE_CONFIG};
+    choose_key,BLOCKSIZE,STD_BINCODE_CONFIG,encode_u48,decode_u48};
 use crate::tilematrix::bitset::{BitSet,BitSetIterator};
 use std::collections::HashMap;
 use core::marker::PhantomData;
@@ -499,7 +499,7 @@ impl <'a,K,V> Encode for CompressedMap<'a,K,V> where V: Encode {
         Encode::encode(&self.plan, encoder)?;
         encoder.writer().write(&self.salt)?;
         for core in &self.core {
-            Encode::encode(&core.nblocks,encoder)?;
+            encode_u48(core.nblocks,encoder)?;
         }
         for core in &self.core {
             encoder.writer().write(&core.blocks.as_ref())?;
@@ -554,7 +554,7 @@ impl <'a,'de:'a,K,V> BorrowDecode<'de> for CompressedMap<'a,K,V> where V: Borrow
         decoder.reader().read(&mut salt)?;
         let mut nblocks_per_phase : Vec<usize> = Vec::with_capacity(nphases);
         for _phase in 0..nphases {
-            let nblocks = Decode::decode(decoder)?;
+            let nblocks = decode_u48(decoder)?;
             if nblocks < 2 { return err("must have at least 2 nblocks"); }
             nblocks_per_phase.push(nblocks);
         }

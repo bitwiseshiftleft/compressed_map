@@ -2,6 +2,15 @@
 name = "compressed_map"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "'Static functions': compressed maps with the keys removed"
+readme = "README.md"
+repository = "https://github.com/bitwiseshiftleft/compressed_map"
+categories = ["data-structures", "compression"]
+include = ["/src", "/benches", "LICENSE.txt"]
+
+[badges]
+maintenance = { status = "experimental" }
 
 [features]
 threading = []
@@ -12,7 +21,7 @@ siphasher = "0.3"
 bincode = "2.0.0-RC.1"
 rand = "0.8.5"
 
-[target.'cfg(bench)'.dev-dependencies]
+[dev-dependencies]
 criterion = "0.3"
 
 [[bench]]
@@ -26,6 +35,8 @@ harness = false
 [[bench]]
 name = "nonuniform"
 harness = false
+
+[profile.bench]
 
 #[profile.release]
 #lto = true

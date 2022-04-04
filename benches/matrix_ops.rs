@@ -1,9 +1,11 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use compressed_map::tilematrix::matrix::Matrix;
-use std::cmp::max;
 
+#[cfg(bench)]
 fn criterion_benchmark(crit: &mut Criterion) {
+    /* Real matrix benchmark */
+    use std::cmp::max;
+    use compressed_map::tilematrix::matrix::Matrix;
     let sizes = vec![100usize,1000,10000];
     for size in sizes {
         let mut a = Matrix::new(size,size,0);
@@ -23,6 +25,12 @@ fn criterion_benchmark(crit: &mut Criterion) {
             a.rref();
         }));
     }
+}
+
+#[cfg(not(bench))]
+fn criterion_benchmark(_crit: &mut Criterion) {
+    /* Empty matrix benchmark, because matrix code is private */
+    println!("Matrix benches are disabled unless you pass --cfg bench");
 }
 
 criterion_group!(benches, criterion_benchmark);

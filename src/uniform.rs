@@ -20,7 +20,7 @@ use bincode::enc::{Encoder};
 use bincode::de::{BorrowDecoder};
 use bincode::error::{EncodeError,DecodeError};
 use bincode::enc::write::Writer;
-use bincode::de::read::{BorrowReader};
+use bincode::de::read::{Reader,BorrowReader};
 
 use std::io::{Read,Error,ErrorKind,BufWriter,Write};
 use std::fs::{File,OpenOptions};
@@ -416,6 +416,28 @@ impl<'a> MapCore<'a>  {
     }
 }
 
+/* Encode a usize using 48 bits */
+pub(crate) fn encode_u48<'b,E: Encoder>(u48: usize, encoder: &mut E) -> Result<(), EncodeError> {
+    let as_u64 = u48 as u64;
+    if as_u64 > 1<<48 {
+        return Err(EncodeError::OtherString("usize as u48 is > 48 bits".to_string()));
+    }
+    let bytes = as_u64.to_le_bytes();
+    encoder.writer().write(&bytes[..6])
+}
+
+/* Decode a usize using 48 bits */
+pub(crate) fn decode_u48<'de, D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<usize, DecodeError> {
+    let mut bytes = [0u8;8];
+    decoder.reader().read(&mut bytes[..6])?;
+    let ret_u64 = u64::from_le_bytes(bytes);
+    if usize::BITS < u64::BITS && ret_u64 > usize::MAX as u64 {
+        Err(DecodeError::OtherString("u48 was > size of usize".to_string()))
+    } else {
+        Ok(ret_u64 as usize)
+    }
+}
+
 
 const MAGIC: &[u8;4] = b"cmc1";
 impl <'a> Encode for MapCore<'a> {
@@ -423,7 +445,7 @@ impl <'a> Encode for MapCore<'a> {
         Encode::encode(MAGIC, encoder)?;
         Encode::encode(&self.hash_key, encoder)?;
         Encode::encode(&self.bits_per_value, encoder)?;
-        Encode::encode(&self.nblocks, encoder)?;
+        encode_u48(self.nblocks, encoder)?;
         encoder.writer().write(&self.blocks.as_ref())
     }
 }
@@ -437,7 +459,7 @@ impl <'a, 'de:'a> BorrowDecode<'de> for MapCore<'a> {
 
         let hash_key       = Decode::decode(decoder)?;
         let bits_per_value = Decode::decode(decoder)?;
-        let nblocks : usize = Decode::decode(decoder)?;
+        let nblocks : usize = decode_u48(decoder)?;
         if nblocks < 2 {
             return Err(DecodeError::OtherString("bits_per_value must be at least 2".to_string()));
         } else if bits_per_value == 0 && nblocks != 2 {
