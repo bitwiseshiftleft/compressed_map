@@ -64,4 +64,9 @@ to [ribbon filters](https://engineering.fb.com/2021/07/09/data-infrastructure/ri
 These take asymptotically Õ(n^(3/2)) time and Õ(n) memory to construct.
 In practice, they top out at a few hundred million to a billion rows on
 commodity hardware, due to the memory consumption, unless someone can come
-up with a lighter building algorithm. 
+up with a lighter building algorithm.
+
+For a `CompressedMap`, not all the keys are used in each level.  Roughly,
+if there is a single "dominant" value that appears vastly more often than
+the rest, then the memory consumption depends on some multiple (2-3x) of
+how often the non-dominant values appear.

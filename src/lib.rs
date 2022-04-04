@@ -114,12 +114,12 @@ copies and O(n log n) memory consumption.
 Building an [`ApproxSet`] is similar in performance to a [`CompressedRandomMap`] of the
 same size.
  
-The performance of building a [`CompressedMap`] depends mostly on the population of its
-second-most-common value; the most-common values usually just have to be counted and queried
-against the map, and only a minority of them are used in the expensive part of the solver.
+When building a [`CompressedMap`], if one value is vastly more populous than the rest,
+it will usually not be used in most of the internal `CompressedRandomMap` objects.  As a
+result, the building performance depends more on the population of the non-dominant values.
 So for example, if 99% of the values are `false` and 1% are `true`, then building a map takes
-around an order of magnitude less time and memory (not two orders of magnitude because the
-values still need to be stored, queried etc).
+around an order of magnitude less time and memory, and the largest [`CompressedMap`]
+contains only 2-3% of the total population.
 
 ## Threading
 
