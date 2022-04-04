@@ -6,8 +6,9 @@
  * Matrix operations implemented using 16x16 "tile" submatrices.
  */
 
-use crate::tilematrix::tile::{Tile,Edge,Index,Permutation,row_mul,row_mul_acc,
-    bulk_swap_rows,bulk_swap2_rows,PERMUTE_ZERO,PERMUTE_ALL_ZERO};
+use crate::tilematrix::tile::{self,Tile,Edge,Index,Permutation,row_mul,row_mul_acc,
+    bulk_swap_rows,bulk_swap2_rows,PERMUTE_ZERO,PERMUTE_ALL_ZERO,
+    bulk_permute_accum_columns,bulk_permute_accum2_columns};
 use std::cmp::{min,max};
 use std::ops::{AddAssign};
 use rand::{Rng,thread_rng};
@@ -188,6 +189,7 @@ impl Matrix {
      *     The minimum number of rows, columns and augmentation will be used.
      *     The augmentation on b will be ignored if the column counts don't match.
      */
+    #[inline(always)]
     pub fn assign_mul(&mut self, a: &Matrix, b: &Matrix) {
         self.zeroize();
         self.accum_mul(a,b);
@@ -197,37 +199,9 @@ impl Matrix {
      *     The minimum number of rows, columns and augmentation will be used.
      *     The augmentation on b will be ignored if the column counts don't match.
      */
+    #[inline(always)]
     pub fn accum_mul(&mut self, a: &Matrix, b: &Matrix) {
-        // debug_assert!(self.is_valid());
-        // debug_assert!(a.is_valid());
-        // debug_assert!(b.is_valid());
-        let trows    = tiles_spanning(min(self.rows,a.rows));
-        let mut taug = tiles_spanning(min(self.cols_aug,b.cols_aug));
-        let taug_a   = tiles_spanning(min(self.cols_aug,a.cols_aug));
-        let tcself   = tiles_spanning(self.cols_main);
-        let tcb      = tiles_spanning(b.cols_main);
-        let tca      = tiles_spanning(a.cols_main);
-        let tcols = min(tcself,tcb);
-        if tcself != tcb {
-            debug_assert!(taug==0);
-            taug = 0;
-        }
-        let tcols_total = tcols + taug;
-        let tjoin = tiles_spanning(min(a.cols_main,b.rows));
-
-        for trow in 0..trows {
-            let offset = trow*self.stride;
-            let self_ptr = &mut self.tiles[offset .. offset+tcols_total];
-            for tj in 0..tjoin {
-                let a_tile =  a.tiles[trow*a.stride+tj+0];
-                let b_ptr = &b.tiles[tj*b.stride .. tj*b.stride+tcols_total];
-                row_mul_acc(self_ptr,a_tile,b_ptr);
-            }
-            for aug in 0..taug_a {
-                self.tiles[offset+tcself+aug] ^= a.tiles[trow*a.stride+tca+aug];
-            }
-        }
-        // debug_assert!(self.is_valid());
+        matrix_accum_mul::runtime(self,a,b);
     }
 
     /** Multiply self by another matrix, and return the result */
@@ -292,215 +266,16 @@ impl Matrix {
         (&mut r1[start..ttotal], &mut r2[start..ttotal])
     }
 
-    /** Swap rows ra..ra+nrows with rb..rb+nrows.  The ranges must be disjoint. */
-    fn swap_rows(&mut self, ra:usize, rb:usize, mut nrows:usize, start:usize) {
-        if ra == rb { return };
-        let (mut ra, mut rb) = (min(ra,rb), max(ra,rb));
-        const EBITS : usize = Tile::EDGE_BITS;
-        let ttotal = tiles_spanning(self.cols_main) + tiles_spanning(self.cols_aug);
-        while nrows > 0 {
-            let (ra0,ra1) = (ra % EBITS, ra / EBITS);
-            let (rb0,rb1) = (rb % EBITS, rb / EBITS);
-            let cando = min(min(min(EBITS-ra0,EBITS-rb0),nrows),rb-ra);
-            if ra1==rb1 {
-                bulk_swap_rows(&mut self.tiles[ra1*self.stride+start..ra1*self.stride+ttotal],ra0,rb0,cando);
-            } else {
-                let (rowa,rowb) = self.two_rows(ra1,rb1,start);
-                bulk_swap2_rows(rowa,rowb,ra0,rb0,cando);
-            }
-            ra += cando;
-            rb += cando;
-            nrows -= cando;
-        }
-    }
-
-    /** Tile-aligned row operation: src_row[start..end] += tile * target_row[start..end]
-     * src_row and target_row must differ.
-     */
-    fn rowop(&mut self, tile:Tile, target_row:usize, src_row:usize, start:usize) {
-        let (src_sec,target_sec) = self.two_rows(src_row,target_row,start);
-        row_mul_acc(target_sec, tile, src_sec);
-    }
-
     /**
      * Put self in row-reduced echelon form.
      * Return the rank and a set of which columns are in echelon
      */
-    pub fn rref(&mut self) -> (usize, BitSet) {
-        // debug_assert!(self.is_valid());
-        let rows = self.rows;
-        let cols = self.cols_main;
-        let trows = tiles_spanning(rows);
-        let tcols = tiles_spanning(cols);
-        let tstride = self.stride;
-        let ttotal = tcols + tiles_spanning(self.cols_aug);
-        let mut column_is_in_echelon = BitSet::with_capacity(cols);
-        let mut rank = 0;
-        if trows == 0 { return (rank,column_is_in_echelon); } // trivial
-    
-        /* Put the tile-columns into echelon form, one after another */
-        for tcol in 0..tcols {
-            /* Which columns have we echelonized in this loop? */
-            let mut ech : Edge = 0;
-            let mut perm_matrix_cumulative = PERMUTE_ALL_ZERO;
-    
-            /* We want to echelonize Tile::EDGE_BITS rows if possible.  To do this, we select as
-             * the active tile-row one which has Tile::EDGE_BITS rows not in the current echelon
-             * structure, if possible.  Since the rows in echelon get moved to the beginning,
-             * this is either trow_min or trow_min + 1.
-             */
-            let trow_min = rank/Tile::EDGE_BITS;
-            let mut trow_begin = trow_min + (rank % Tile::EDGE_BITS != 0) as usize;
-            if trow_min   >= trows { break; } // Done!
-            if trow_begin >= trows { trow_begin=trow_min; }
-            let mut trow=trow_begin;
-    
-            // let active_range = [trow_begin*tstride+tcol .. trow_begin*tstride+ttotal];
-    
-            /* Massage the active row so that it can eliminate every column */
-            loop {
-                /* Which single rows are available?
-                 * All of them, unless we're on the first available tile-row
-                 */
-                let first_available_row =
-                    if trow*Tile::EDGE_BITS < rank {
-                        rank - trow*Tile::EDGE_BITS
-                    } else { 0 };
-                let rows_avail = ((1 as Edge)<<first_available_row).wrapping_neg();
-    
-                /* Make pointers to the current tile we're looking at to get more columns */
-                let mut working = self.tiles[trow*tstride+tcol];
-    
-                /* If it's not the first, apply our progress so far */
-                if trow != trow_begin {
-                    self.rowop(working * &perm_matrix_cumulative, trow, trow_begin, tcol);
-                    working = self.tiles[trow*tstride+tcol];
-                }
-    
-                /* Row-reduce the current tile */
-                let (aug, perm, ech_new) = working.pseudoinverse(rows_avail);
-                debug_assert!(ech & ech_new == 0);
-
-                if ech_new != 0 {
-                    if trow == trow_begin {
-                        /* We got some new columns.  Apply the operation to the rest of the row */
-                        row_mul(aug, &mut self.tiles[trow*tstride+tcol .. trow*tstride+ttotal]);
-                        perm_matrix_cumulative = perm;
-                    } else {
-                        /* Move the new progress to the active row */
-                        let nech = ech.count_ones() as Index;
-                        let nech_new = ech_new.count_ones() as Index;
-
-                        /* Eliminate these columns from the active row, then re-add them as identity */
-                        let factor = self.tiles[trow_begin*tstride+tcol] * &perm
-                                   + Tile::IDENTITY.extract_cols(first_available_row,nech,nech_new);
-                        self.rowop(factor * aug, trow_begin, trow, tcol);
-    
-                        /* Append the permutation matrix to perm */
-                        (&mut perm_matrix_cumulative[nech..nech+nech_new])
-                            .copy_from_slice(&perm[first_available_row .. first_available_row+nech_new]);
-                    }
-                    ech |= ech_new;
-                }
-    
-                /* next row */
-                trow += 1;
-                if trow >= trows { trow=trow_min; } /* wrap around */
-                if trow == trow_begin || ech == !0 { break; }
-            }
-    
-            /* OK, we now have a tile which echelonizes all the selected columns.  Eliminate them. */
-            for trow in 0..trows {
-                if trow != trow_begin {
-                    let factor = self.tiles[trow*tstride+tcol] * &perm_matrix_cumulative;
-                    self.rowop(factor, trow, trow_begin, tcol);
-                }
-            }
-    
-            let begin = max(trow_begin * Tile::EDGE_BITS, rank);
-            let active_tile = self.tiles[trow_begin*tstride+tcol];
-            if !(active_tile & !Tile::IDENTITY).is_zero() {
-                /* The working tile is permuted, because it picked up some rows from one tile-row,
-                 * and other rows from another tile-row.  Unepermute it to make sure it's in REF */
-                let rows_avail = ((1 as Edge)<<(begin % Tile::EDGE_BITS)).wrapping_neg();
-                let (pseudoinv, _perm, _ech_new) = active_tile.pseudoinverse(rows_avail);
-                row_mul(pseudoinv, &mut self.tiles[trow_begin*tstride+tcol .. trow_begin*tstride+ttotal]);
-            }
-    
-            /* Swap the active row into place at the beginning of the matrix */
-            let nech = ech.count_ones() as usize;
-            self.swap_rows(rank, begin, nech, tcol);
-            rank += nech;
-    
-            /* Mark the echelonized columns */
-            for i in 0..Tile::EDGE_BITS {
-                if ((ech>>i)&1) != 0 {
-                    column_is_in_echelon.insert(tcol*Tile::EDGE_BITS + i);
-                }
-            }
-
-        }
-        // debug_assert!(self.is_valid());
-    
-        (rank, column_is_in_echelon)
-    }
+    #[inline(always)]
+    pub fn rref(&mut self) -> (usize, BitSet) { matrix_rref::runtime(self) }
 
     /* Place the columns of the other matrix next to this one's, and add their aug components */
     pub fn append_columns(&self, rhs: &Matrix) -> Matrix {
-        // debug_assert!(self.is_valid());
-        // debug_assert!(rhs.is_valid());
-        assert!(self.rows == rhs.rows);
-        let mut ret = Matrix::new(self.rows, self.cols_main + rhs.cols_main, max(self.cols_aug,rhs.cols_aug));
-        let tcols_self = tiles_spanning(self.cols_main);
-        let tcols_rhs  = tiles_spanning(rhs.cols_main);
-        let tcols_ret  = tiles_spanning(ret.cols_main);
-        let taugs_self = tiles_spanning(self.cols_aug);
-        let taugs_rhs  = tiles_spanning(rhs.cols_aug);
-        let trows      = tiles_spanning(self.rows);
-
-        /* Construct permutations in case it's unaligned */
-        let mut perm_to_cur  = PERMUTE_ALL_ZERO;
-        let mut perm_to_prev = PERMUTE_ALL_ZERO;
-        let bshift = self.cols_main % Tile::EDGE_BITS;
-        if bshift != 0 {
-            for i in 0..bshift {
-                perm_to_cur[i] = (i + Tile::EDGE_BITS - bshift) as u8;
-            }
-            for i in 0..Tile::EDGE_BITS-bshift {
-                perm_to_prev[i + bshift] = i as u8;
-            }
-        }
-
-        for trow in 0..trows {
-            /* Copy self to output */
-            ret.tiles[ret.stride*trow .. ret.stride*trow + tcols_self].copy_from_slice(
-                &self.tiles[self.stride*trow .. self.stride*trow+tcols_self]);
-
-            /* Copy rhs to output */
-            if self.cols_main % Tile::EDGE_BITS == 0 {
-                /* Aligned: just memcpy it */
-                ret.tiles[ret.stride*trow+tcols_self .. ret.stride*trow + tcols_self+tcols_rhs].copy_from_slice(
-                    &rhs.tiles[rhs.stride*trow .. rhs.stride*trow+tcols_rhs]);
-            } else {
-                /* Unaligned: use column permutations */
-                for tcol in 0..tcols_rhs {
-                    ret.tiles[ret.stride*trow + tcols_self+tcol-1]  += rhs.tiles[rhs.stride*trow+tcol].permute_columns(&perm_to_prev);
-                    if tcols_self+tcol < tcols_ret {
-                        ret.tiles[ret.stride*trow + tcols_self+tcol] = rhs.tiles[rhs.stride*trow+tcol].permute_columns(&perm_to_cur);
-                    }
-                }
-            }
-
-            /* Combine the augcols */
-            for taug in 0..taugs_self {
-                ret.tiles[ret.stride*trow+tcols_ret+taug] = self.tiles[self.stride*trow+tcols_self+taug];
-            }
-            for taug in 0..taugs_rhs {
-                ret.tiles[ret.stride*trow+tcols_ret+taug] += rhs.tiles[rhs.stride*trow+tcols_rhs+taug];
-            }
-        }
-        // debug_assert!(ret.is_valid());
-        ret
+        matrix_append_columns::runtime(self,rhs)
     }
 
     /**
@@ -508,6 +283,8 @@ impl Matrix {
      * If want_yes, the first will contain columns where which_to_take == true.
      * If want_no, the second will contain columns where which_to_take == false, and the aug columns.
      * Unwanted outputs will be the trivial matrix.
+     * 
+     * PERF: could do by groups of columns maybe, to improve cache usage??
      */
     pub fn partition_columns(
         &self, columns: &BitSet,
@@ -545,6 +322,8 @@ impl Matrix {
             Matrix::new(0,0,0)
         };
 
+        if trows == 0 { return (yes,no); }
+
         /* Count how many columns would be added before this one. */
         let offset_yes = columns.count_within(0..columns_before);
         let offset_no = columns_before - offset_yes;
@@ -573,17 +352,17 @@ impl Matrix {
             if want_yes && yeses != 0 {
                 let (s0,s1) = edge2perms(yeses, &mut offset_yes);
                 if offset_yes > EBITS {
-                    for trow in 0..trows {
-                        /* Do the vertical loops fused; hopefully that thrashes the cache less */
-                        let t = self.tiles[trow*self.stride + tcol];
-                        yes.tiles[trow*yes.stride + col_yes    ] |= t.permute_columns(&s0);
-                        yes.tiles[trow*yes.stride + col_yes + 1]  = t.permute_columns(&s1);
-                    }
+                    bulk_permute_accum2_columns::runtime(
+                        &mut yes.tiles[col_yes..], yes.stride,
+                        &self.tiles[tcol..], self.stride,
+                        trows, &s0, &s1
+                    );
                 } else {
-                    for trow in 0..trows {
-                        let t = self.tiles[trow*self.stride + tcol];
-                        yes.tiles[trow*yes.stride + col_yes] |= t.permute_columns(&s0);
-                    }
+                    bulk_permute_accum_columns::runtime(
+                        &mut yes.tiles[col_yes..], yes.stride,
+                        &self.tiles[tcol..], self.stride,
+                        trows, &s0
+                    );
                 }
                 col_yes += offset_yes/EBITS;
                 offset_yes %= EBITS;
@@ -592,17 +371,17 @@ impl Matrix {
             if want_no && nos != 0 {
                 let (s0,s1) = edge2perms(nos, &mut offset_no);
                 if offset_no > EBITS {
-                    for trow in 0..trows {
-                        /* Do the vertical loops fused; hopefully that thrashes the cache less */
-                        let t = self.tiles[trow*self.stride + tcol];
-                        no.tiles[trow*no.stride + col_no    ] |= t.permute_columns(&s0);
-                        no.tiles[trow*no.stride + col_no + 1]  = t.permute_columns(&s1);
-                    }
+                    bulk_permute_accum2_columns::runtime(
+                        &mut no.tiles[col_no..], no.stride,
+                        &self.tiles[tcol..], self.stride,
+                        trows, &s0, &s1
+                    );
                 } else {
-                    for trow in 0..trows {
-                        let t = self.tiles[trow*self.stride + tcol];
-                        no.tiles[trow*no.stride + col_no] |= t.permute_columns(&s0);
-                    }
+                    bulk_permute_accum_columns::runtime(
+                        &mut no.tiles[col_no..], no.stride,
+                        &self.tiles[tcol..], self.stride,
+                        trows, &s0
+                    );
                 }
                 col_no += offset_no/EBITS;
                 offset_no %= EBITS;
@@ -613,155 +392,30 @@ impl Matrix {
         (yes,no)
     }
 
+
+    /** Return two matrices: one with the rows of self less than row, and one with more than row */
+    pub fn split_at_row(self, row:usize) -> (Matrix, Matrix) {
+        matrix_split_at_row::runtime(self,row)
+    }
+
     /**
      * Splits self into two matrices, nondestructively.  The first will contain those rows
      * which are in the set, and the second those which are not.
      * 
      * Doesn't take offsets or want_* because libfrayed doesn't need them
      */
+    #[inline(always)]
     pub fn partition_rows(&self, rows: &BitSet) -> (Matrix,Matrix) {
-        // debug_assert!(self.is_valid());
-        const EBITS:usize = Tile::EDGE_BITS as usize;
-        let tcols = tiles_spanning(self.cols_main) + tiles_spanning(self.cols_aug);
-        
-        /* Allocate the results */
-        let mut yes = Matrix::new(rows.len(),             self.cols_main, self.cols_aug);
-        let mut no  = Matrix::new(self.rows - rows.len(), self.cols_main, self.cols_aug);
-
-        let (mut offset_yes, mut offset_no, mut row_yes, mut row_no) = (0,0,0,0);
-        for trow in 0..tiles_spanning(self.rows) {
-            let (selfs,others) = set_by_edges(self.rows,&rows,trow);
-
-            if selfs != 0 {
-                let (s0,s1) = co_edge2perms(selfs, &mut offset_yes);
-                row_mul_acc(&mut yes.tiles[row_yes*yes.stride .. row_yes*yes.stride+tcols], Tile::IDENTITY * &s0,
-                            &self.tiles[trow*self.stride .. trow*self.stride+tcols]);
-                row_yes += offset_yes/EBITS;
-                if offset_yes > EBITS {
-                    row_mul_acc(&mut yes.tiles[row_yes*yes.stride .. row_yes*yes.stride+tcols], Tile::IDENTITY * &s1,
-                                &self.tiles[trow*self.stride .. trow*self.stride+tcols]);
-                }
-                offset_yes %= EBITS;
-            }
-
-            if others != 0 {
-                let (o0,o1) = co_edge2perms(others, &mut offset_no);
-                row_mul_acc(&mut no.tiles[row_no*no.stride .. row_no*no.stride+tcols], Tile::IDENTITY * &o0,
-                            &self.tiles[trow*self.stride .. trow*self.stride+tcols]);
-                row_no += offset_no/EBITS;
-                if offset_no > EBITS {
-                    row_mul_acc(&mut no.tiles[row_no*no.stride .. row_no*no.stride+tcols], Tile::IDENTITY * &o1,
-                                &self.tiles[trow*self.stride .. trow*self.stride+tcols]);
-                }
-                offset_no %= EBITS;
-            }
-        }
-        // debug_assert!(yes.is_valid());
-        // debug_assert!(no.is_valid());
-        (yes,no)
+        matrix_partition_rows::runtime(self,rows)
     }
-
-    /** Return two matrices: one with the rows of self less than row, and one with more than row */
-    pub fn split_at_row(self, row:usize) -> (Matrix, Matrix) {
-        // debug_assert!(self.is_valid());
-        debug_assert!(row <= self.rows);
-
-        if row == self.rows {
-            let other = Matrix::new(0,self.cols_main,self.cols_aug);
-            return (self, other);
-        }
-
-        let tcols = tiles_spanning(self.cols_main) + tiles_spanning(self.cols_aug);
-        let mut top = Matrix::new(row,           self.cols_main, self.cols_aug);
-        let mut bot = Matrix::new(self.rows-row, self.cols_main, self.cols_aug);
-        for trow in 0..tiles_spanning(row) {
-            top.tiles[trow*top.stride .. trow*top.stride+tcols]
-                .copy_from_slice(& self.tiles[trow*self.stride .. trow*self.stride+tcols]);
-        }
-
-        if row % Tile::EDGE_BITS != 0 {
-            /* Mask the top */
-            let row0 = row % Tile::EDGE_BITS;
-            let mask = Tile::rows_mask(0,row0);
-            let trow = row/Tile::EDGE_BITS;
-            for tcol in 0..tcols {
-                top.tiles[trow*top.stride + tcol] &= mask;
-            }
-
-            /* Shift the bottom */
-            let perm_up = Tile::IDENTITY.extract_cols(0, Tile::EDGE_BITS-row0, row0);
-            let perm_down = Tile::IDENTITY.extract_cols(row0, 0, Tile::EDGE_BITS-row0);
-            let off = tiles_spanning(row);
-            let tot_rows = tiles_spanning(self.rows);
-            for trow in 0..tiles_spanning(bot.rows) {
-                let mut bot_row = &mut bot.tiles[trow*bot.stride .. trow*bot.stride+tcols];
-                row_mul_acc(&mut bot_row, perm_down, &self.tiles[(trow+off-1)*self.stride .. (trow+off-1)*self.stride+tcols]);
-                if trow+off < tot_rows  {
-                    row_mul_acc(&mut bot_row, perm_up,   &self.tiles[(trow+off)*self.stride .. (trow+off)*self.stride+tcols]);
-                }
-            }
-        } else {
-            /* Memcpy the bottom */
-            let off = tiles_spanning(row);
-            for trow in 0..tiles_spanning(bot.rows) {
-                bot.tiles[trow*bot.stride .. trow*bot.stride+tcols]
-                    .copy_from_slice(& self.tiles[(trow+off)*self.stride .. (trow+off)*self.stride+tcols]);
-            }
-        }
-
-        // debug_assert!(top.is_valid());
-        // debug_assert!(bot.is_valid());
-        (top,bot)
-    }
-
     /**
      * The opposite of partition_rows.
      * Interleave self's rows and other's rows to form a new matrix;
      * take the rows from self according to the bitset, or from other.
      */
+    #[inline(always)]
     pub fn interleave_rows(&self, other: &Matrix, take_from_self: &BitSet) -> Matrix {
-        // debug_assert!(self.is_valid());
-        // debug_assert!(other.is_valid());
-        const EBITS:usize = Tile::EDGE_BITS as usize;
-        debug_assert_eq!(take_from_self.len(), self.rows);
-        debug_assert_eq!(self.cols_main, other.cols_main);
-        debug_assert_eq!(self.cols_aug, other.cols_aug);
-
-        let tcols = tiles_spanning(self.cols_main) + tiles_spanning(self.cols_aug);
-        
-        /* Allocate the results */
-        let mut result = Matrix::new(self.rows + other.rows, self.cols_main, self.cols_aug);
-
-        let (mut offset_yes, mut offset_no, mut row_yes, mut row_no) = (0,0,0,0);
-        for trow in 0..tiles_spanning(result.rows) {
-            let (selfs,others) = set_by_edges(result.rows,&take_from_self,trow);
-
-            if selfs != 0 {
-                let (s0,s1) = edge2perms(selfs, &mut offset_yes);
-                row_mul_acc(&mut result.tiles[trow*result.stride .. trow*result.stride+tcols], Tile::IDENTITY * &s0,
-                            &self.tiles[row_yes*self.stride .. row_yes*self.stride+tcols]);
-                row_yes += offset_yes/EBITS;
-                if offset_yes > EBITS {
-                    row_mul_acc(&mut result.tiles[trow*result.stride .. trow*result.stride+tcols], Tile::IDENTITY * &s1,
-                        &self.tiles[row_yes*self.stride .. row_yes*self.stride+tcols]);
-                }
-                offset_yes %= EBITS;
-            }
-
-            if others != 0 {
-                let (o0,o1) = edge2perms(others, &mut offset_no);
-                row_mul_acc(&mut result.tiles[trow*result.stride .. trow*result.stride+tcols], Tile::IDENTITY * &o0,
-                            &other.tiles[row_no*other.stride .. row_no*other.stride+tcols]);
-                row_no += offset_no/EBITS;
-                if offset_no > EBITS {
-                    row_mul_acc(&mut result.tiles[trow*result.stride .. trow*result.stride+tcols], Tile::IDENTITY * &o1,
-                        &other.tiles[row_no*other.stride .. row_no*other.stride+tcols]);
-                }
-                offset_no %= EBITS;
-            }
-        }
-        // debug_assert!(result.is_valid());
-        result
+        matrix_interleave_rows::runtime(self,other,take_from_self)
     }
 
     /**
@@ -787,6 +441,379 @@ impl AddAssign<&Matrix> for Matrix {
     fn add_assign(&mut self, other:&Matrix) { self.add_assign(other); }
 }
 
+/**************************************************************************
+ * Accelerated functions
+ **************************************************************************/
+tile::simd::accelerated!(fn matrix_accum_mul(dst: &mut Matrix, a: &Matrix, b: &Matrix) {
+    let trows    = tiles_spanning(min(dst.rows,a.rows));
+    let mut taug = tiles_spanning(min(dst.cols_aug,b.cols_aug));
+    let taug_a   = tiles_spanning(min(dst.cols_aug,a.cols_aug));
+    let tcself   = tiles_spanning(dst.cols_main);
+    let tcb      = tiles_spanning(b.cols_main);
+    let tca      = tiles_spanning(a.cols_main);
+    let tcols = min(tcself,tcb);
+    if tcself != tcb {
+        debug_assert!(taug==0);
+        taug = 0;
+    }
+    let tcols_total = tcols + taug;
+    let tjoin = tiles_spanning(min(a.cols_main,b.rows));
+
+    for trow in 0..trows {
+        let offset = trow*dst.stride;
+        let self_ptr = &mut dst.tiles[offset .. offset+tcols_total];
+        for tj in 0..tjoin {
+            let a_tile =  a.tiles[trow*a.stride+tj+0];
+            let b_ptr = &b.tiles[tj*b.stride .. tj*b.stride+tcols_total];
+            row_mul_acc::with_accel::<Accel>(self_ptr,a_tile,b_ptr);
+        }
+        for aug in 0..taug_a {
+            dst.tiles[offset+tcself+aug] ^= a.tiles[trow*a.stride+tca+aug];
+        }
+    }
+});
+
+tile::simd::accelerated!(pub fn matrix_rref(matrix: &mut Matrix) -> (usize, BitSet) {
+    // debug_assert!(matrix.is_valid());
+    let rows = matrix.rows;
+    let cols = matrix.cols_main;
+    let trows = tiles_spanning(rows);
+    let tcols = tiles_spanning(cols);
+    let tstride = matrix.stride;
+    let ttotal = tcols + tiles_spanning(matrix.cols_aug);
+    let mut column_is_in_echelon = BitSet::with_capacity(cols);
+    let mut rank = 0;
+    if trows == 0 { return (rank,column_is_in_echelon); } // trivial
+ 
+    /* Put the tile-columns into echelon form, one after another */
+    for tcol in 0..tcols {
+        /* Which columns have we echelonized in this loop? */
+        let mut ech : Edge = 0;
+        let mut perm_matrix_cumulative = PERMUTE_ALL_ZERO;
+ 
+        /* We want to echelonize Tile::EDGE_BITS rows if possible.  To do this, we select as
+         * the active tile-row one which has Tile::EDGE_BITS rows not in the current echelon
+         * structure, if possible.  Since the rows in echelon get moved to the beginning,
+         * this is either trow_min or trow_min + 1.
+         */
+        let trow_min = rank/Tile::EDGE_BITS;
+        let mut trow_begin = trow_min + (rank % Tile::EDGE_BITS != 0) as usize;
+        if trow_min   >= trows { break; } // Done!
+        if trow_begin >= trows { trow_begin=trow_min; }
+        let mut trow=trow_begin;
+ 
+        // let active_range = [trow_begin*tstride+tcol .. trow_begin*tstride+ttotal];
+ 
+        /* Massage the active row so that it can eliminate every column */
+        loop {
+            /* Which single rows are available?
+             * All of them, unless we're on the first available tile-row
+             */
+            let first_available_row =
+                if trow*Tile::EDGE_BITS < rank {
+                    rank - trow*Tile::EDGE_BITS
+                } else { 0 };
+            let rows_avail = ((1 as Edge)<<first_available_row).wrapping_neg();
+ 
+            /* Make pointers to the current tile we're looking at to get more columns */
+            let mut working = matrix.tiles[trow*tstride+tcol];
+ 
+            /* If it's not the first, apply our progress so far */
+            if trow != trow_begin {
+                let (src_sec,target_sec) = matrix.two_rows(trow_begin, trow, tcol);
+                row_mul_acc::with_accel::<Accel>(target_sec, working * &perm_matrix_cumulative, src_sec);
+                working = matrix.tiles[trow*tstride+tcol];
+            }
+ 
+            /* Row-reduce the current tile */
+            let (aug, perm, ech_new) = working.pseudoinverse(rows_avail);
+            debug_assert!(ech & ech_new == 0);
+ 
+            if ech_new != 0 {
+                if trow == trow_begin {
+                    /* We got some new columns.  Apply the operation to the rest of the row */
+                    row_mul::with_accel::<Accel>(aug, &mut matrix.tiles[trow*tstride+tcol .. trow*tstride+ttotal]);
+                    perm_matrix_cumulative = perm;
+                } else {
+                    /* Move the new progress to the active row */
+                    let nech = ech.count_ones() as Index;
+                    let nech_new = ech_new.count_ones() as Index;
+ 
+                    /* Eliminate these columns from the active row, then re-add them as identity */
+                    let factor = matrix.tiles[trow_begin*tstride+tcol] * &perm
+                               + Tile::IDENTITY.extract_cols(first_available_row,nech,nech_new);
+ 
+                    let (src_sec,target_sec) = matrix.two_rows(trow, trow_begin, tcol);
+                    row_mul_acc::with_accel::<Accel>(target_sec, factor * aug, src_sec);
+ 
+                    /* Append the permutation matrix to perm */
+                    (&mut perm_matrix_cumulative[nech..nech+nech_new])
+                        .copy_from_slice(&perm[first_available_row .. first_available_row+nech_new]);
+                }
+                ech |= ech_new;
+            }
+ 
+            /* next row */
+            trow += 1;
+            if trow >= trows { trow=trow_min; } /* wrap around */
+            if trow == trow_begin || ech == !0 { break; }
+        }
+ 
+        /* OK, we now have a tile which echelonizes all the selected columns.  Eliminate them. */
+        for trow in 0..trows {
+            if trow != trow_begin {
+                let factor = matrix.tiles[trow*tstride+tcol] * &perm_matrix_cumulative;
+                let (src_sec,target_sec) = matrix.two_rows(trow_begin, trow, tcol);
+                row_mul_acc::with_accel::<Accel>(target_sec, factor, src_sec);
+            }
+        }
+ 
+        let begin = max(trow_begin * Tile::EDGE_BITS, rank);
+        let active_tile = matrix.tiles[trow_begin*tstride+tcol];
+        if !(active_tile & !Tile::IDENTITY).is_zero() {
+            /* The working tile is permuted, because it picked up some rows from one tile-row,
+             * and other rows from another tile-row.  Unepermute it to make sure it's in REF */
+            let rows_avail = ((1 as Edge)<<(begin % Tile::EDGE_BITS)).wrapping_neg();
+            let (pseudoinv, _perm, _ech_new) = active_tile.pseudoinverse(rows_avail);
+            row_mul::with_accel::<Accel>(pseudoinv, &mut matrix.tiles[trow_begin*tstride+tcol .. trow_begin*tstride+ttotal]);
+        }
+ 
+        /* Swap the active row into place at the beginning of the matrix */
+        let nech = ech.count_ones() as usize;
+        matrix_swap_rows::with_accel::<Accel>(matrix, rank, begin, nech, tcol);
+        rank += nech;
+ 
+        /* Mark the echelonized columns */
+        for i in 0..Tile::EDGE_BITS {
+            if ((ech>>i)&1) != 0 {
+                column_is_in_echelon.insert(tcol*Tile::EDGE_BITS + i);
+            }
+        }
+ 
+    }
+    // debug_assert!(matrix.is_valid());
+ 
+    (rank, column_is_in_echelon)
+});
+
+tile::simd::accelerated!(fn matrix_partition_rows(matrix: &Matrix, rows: &BitSet) -> (Matrix,Matrix) {
+    // debug_assert!(matrix.is_valid());
+    const EBITS:usize = Tile::EDGE_BITS as usize;
+    let tcols = tiles_spanning(matrix.cols_main) + tiles_spanning(matrix.cols_aug);
+    
+    /* Allocate the results */
+    let mut yes = Matrix::new(rows.len(),             matrix.cols_main, matrix.cols_aug);
+    let mut no  = Matrix::new(matrix.rows - rows.len(), matrix.cols_main, matrix.cols_aug);
+
+    let (mut offset_yes, mut offset_no, mut row_yes, mut row_no) = (0,0,0,0);
+    for trow in 0..tiles_spanning(matrix.rows) {
+        let (selfs,others) = set_by_edges(matrix.rows,&rows,trow);
+
+        if selfs != 0 {
+            let (s0,s1) = co_edge2perms(selfs, &mut offset_yes);
+            row_mul_acc::with_accel::<Accel>(&mut yes.tiles[row_yes*yes.stride .. row_yes*yes.stride+tcols], Tile::IDENTITY * &s0,
+                        &matrix.tiles[trow*matrix.stride .. trow*matrix.stride+tcols]);
+            row_yes += offset_yes/EBITS;
+            if offset_yes > EBITS {
+                row_mul_acc::with_accel::<Accel>(&mut yes.tiles[row_yes*yes.stride .. row_yes*yes.stride+tcols], Tile::IDENTITY * &s1,
+                            &matrix.tiles[trow*matrix.stride .. trow*matrix.stride+tcols]);
+            }
+            offset_yes %= EBITS;
+        }
+
+        if others != 0 {
+            let (o0,o1) = co_edge2perms(others, &mut offset_no);
+            row_mul_acc::with_accel::<Accel>(&mut no.tiles[row_no*no.stride .. row_no*no.stride+tcols], Tile::IDENTITY * &o0,
+                        &matrix.tiles[trow*matrix.stride .. trow*matrix.stride+tcols]);
+            row_no += offset_no/EBITS;
+            if offset_no > EBITS {
+                row_mul_acc::with_accel::<Accel>(&mut no.tiles[row_no*no.stride .. row_no*no.stride+tcols], Tile::IDENTITY * &o1,
+                            &matrix.tiles[trow*matrix.stride .. trow*matrix.stride+tcols]);
+            }
+            offset_no %= EBITS;
+        }
+    }
+    // debug_assert!(yes.is_valid());
+    // debug_assert!(no.is_valid());
+    (yes,no)
+});
+
+tile::simd::accelerated!(fn matrix_interleave_rows(matrix: &Matrix, other: &Matrix, take_from_self: &BitSet) -> Matrix {
+    // debug_assert!(matrix.is_valid());
+    // debug_assert!(other.is_valid());
+    const EBITS:usize = Tile::EDGE_BITS as usize;
+    debug_assert_eq!(take_from_self.len(), matrix.rows);
+    debug_assert_eq!(matrix.cols_main, other.cols_main);
+    debug_assert_eq!(matrix.cols_aug, other.cols_aug);
+
+    let tcols = tiles_spanning(matrix.cols_main) + tiles_spanning(matrix.cols_aug);
+    
+    /* Allocate the results */
+    let mut result = Matrix::new(matrix.rows + other.rows, matrix.cols_main, matrix.cols_aug);
+
+    let (mut offset_yes, mut offset_no, mut row_yes, mut row_no) = (0,0,0,0);
+    for trow in 0..tiles_spanning(result.rows) {
+        let (selfs,others) = set_by_edges(result.rows,&take_from_self,trow);
+
+        if selfs != 0 {
+            let (s0,s1) = edge2perms(selfs, &mut offset_yes);
+            row_mul_acc::with_accel::<Accel>(&mut result.tiles[trow*result.stride .. trow*result.stride+tcols], Tile::IDENTITY * &s0,
+                        &matrix.tiles[row_yes*matrix.stride .. row_yes*matrix.stride+tcols]);
+            row_yes += offset_yes/EBITS;
+            if offset_yes > EBITS {
+                row_mul_acc::with_accel::<Accel>(&mut result.tiles[trow*result.stride .. trow*result.stride+tcols], Tile::IDENTITY * &s1,
+                    &matrix.tiles[row_yes*matrix.stride .. row_yes*matrix.stride+tcols]);
+            }
+            offset_yes %= EBITS;
+        }
+
+        if others != 0 {
+            let (o0,o1) = edge2perms(others, &mut offset_no);
+            row_mul_acc::with_accel::<Accel>(&mut result.tiles[trow*result.stride .. trow*result.stride+tcols], Tile::IDENTITY * &o0,
+                        &other.tiles[row_no*other.stride .. row_no*other.stride+tcols]);
+            row_no += offset_no/EBITS;
+            if offset_no > EBITS {
+                row_mul_acc::with_accel::<Accel>(&mut result.tiles[trow*result.stride .. trow*result.stride+tcols], Tile::IDENTITY * &o1,
+                    &other.tiles[row_no*other.stride .. row_no*other.stride+tcols]);
+            }
+            offset_no %= EBITS;
+        }
+    }
+    // debug_assert!(result.is_valid());
+    result
+});
+
+tile::simd::accelerated!(fn matrix_append_columns(matrix: &Matrix, rhs: &Matrix) -> Matrix {
+    // debug_assert!(matrix.is_valid());
+    // debug_assert!(rhs.is_valid());
+    assert!(matrix.rows == rhs.rows);
+    let mut ret = Matrix::new(matrix.rows, matrix.cols_main + rhs.cols_main, max(matrix.cols_aug,rhs.cols_aug));
+    let tcols_self = tiles_spanning(matrix.cols_main);
+    let tcols_rhs  = tiles_spanning(rhs.cols_main);
+    let tcols_ret  = tiles_spanning(ret.cols_main);
+    let taugs_self = tiles_spanning(matrix.cols_aug);
+    let taugs_rhs  = tiles_spanning(rhs.cols_aug);
+    let trows      = tiles_spanning(matrix.rows);
+
+    /* Construct permutations in case it's unaligned */
+    let mut perm_to_cur  = PERMUTE_ALL_ZERO;
+    let mut perm_to_prev = PERMUTE_ALL_ZERO;
+    let bshift = matrix.cols_main % Tile::EDGE_BITS;
+    if bshift != 0 {
+        for i in 0..bshift {
+            perm_to_cur[i] = (i + Tile::EDGE_BITS - bshift) as u8;
+        }
+        for i in 0..Tile::EDGE_BITS-bshift {
+            perm_to_prev[i + bshift] = i as u8;
+        }
+    }
+
+    for trow in 0..trows {
+        /* Copy matrix to output */
+        ret.tiles[ret.stride*trow .. ret.stride*trow + tcols_self].copy_from_slice(
+            &matrix.tiles[matrix.stride*trow .. matrix.stride*trow+tcols_self]);
+
+        /* Copy rhs to output */
+        if bshift == 0 {
+            /* Aligned: just memcpy it */
+            ret.tiles[ret.stride*trow+tcols_self .. ret.stride*trow + tcols_self+tcols_rhs].copy_from_slice(
+                &rhs.tiles[rhs.stride*trow .. rhs.stride*trow+tcols_rhs]);
+        } else {
+            /* Unaligned: use column permutations */
+            for tcol in 0..tcols_rhs {
+                ret.tiles[ret.stride*trow + tcols_self+tcol-1]  += Accel::permute_columns(rhs.tiles[rhs.stride*trow+tcol],&perm_to_prev);
+                if tcols_self+tcol < tcols_ret {
+                    ret.tiles[ret.stride*trow + tcols_self+tcol] = Accel::permute_columns(rhs.tiles[rhs.stride*trow+tcol],&perm_to_cur);
+                }
+            }
+        }
+
+        /* Combine the augcols */
+        for taug in 0..taugs_self {
+            ret.tiles[ret.stride*trow+tcols_ret+taug] = matrix.tiles[matrix.stride*trow+tcols_self+taug];
+        }
+        for taug in 0..taugs_rhs {
+            ret.tiles[ret.stride*trow+tcols_ret+taug] += rhs.tiles[rhs.stride*trow+tcols_rhs+taug];
+        }
+    }
+
+    // debug_assert!(ret.is_valid());
+    ret
+});
+
+tile::simd::accelerated!(fn matrix_swap_rows(matrix: &mut Matrix, ra:usize, rb:usize, nrows:usize, start:usize) {
+    let mut nrows = nrows;
+    if ra == rb { return };
+    let (mut ra, mut rb) = (min(ra,rb), max(ra,rb));
+    const EBITS : usize = Tile::EDGE_BITS;
+    let ttotal = tiles_spanning(matrix.cols_main) + tiles_spanning(matrix.cols_aug);
+    while nrows > 0 {
+        let (ra0,ra1) = (ra % EBITS, ra / EBITS);
+        let (rb0,rb1) = (rb % EBITS, rb / EBITS);
+        let cando = min(min(min(EBITS-ra0,EBITS-rb0),nrows),rb-ra);
+        if ra1==rb1 {
+            bulk_swap_rows::runtime(&mut matrix.tiles[ra1*matrix.stride+start..ra1*matrix.stride+ttotal],ra0,rb0,cando);
+        } else {
+            let (rowa,rowb) = matrix.two_rows(ra1,rb1,start);
+            bulk_swap2_rows::runtime(rowa,rowb,ra0,rb0,cando);
+        }
+        ra += cando;
+        rb += cando;
+        nrows -= cando;
+    }
+});
+
+tile::simd::accelerated!(fn matrix_split_at_row(matrix: Matrix, row:usize) -> (Matrix, Matrix) {
+    // debug_assert!(matrix.is_valid());
+    debug_assert!(row <= matrix.rows);
+
+    if row == matrix.rows {
+        let other = Matrix::new(0,matrix.cols_main,matrix.cols_aug);
+        return (matrix, other);
+    }
+
+    let tcols = tiles_spanning(matrix.cols_main) + tiles_spanning(matrix.cols_aug);
+    let mut top = Matrix::new(row,           matrix.cols_main, matrix.cols_aug);
+    let mut bot = Matrix::new(matrix.rows-row, matrix.cols_main, matrix.cols_aug);
+    for trow in 0..tiles_spanning(row) {
+        top.tiles[trow*top.stride .. trow*top.stride+tcols]
+            .copy_from_slice(& matrix.tiles[trow*matrix.stride .. trow*matrix.stride+tcols]);
+    }
+
+    if row % Tile::EDGE_BITS != 0 {
+        /* Mask the top */
+        let row0 = row % Tile::EDGE_BITS;
+        let mask = Tile::rows_mask(0,row0);
+        let trow = row/Tile::EDGE_BITS;
+        for tcol in 0..tcols {
+            top.tiles[trow*top.stride + tcol] &= mask;
+        }
+
+        /* Shift the bottom */
+        let perm_up = Tile::IDENTITY.extract_cols(0, Tile::EDGE_BITS-row0, row0);
+        let perm_down = Tile::IDENTITY.extract_cols(row0, 0, Tile::EDGE_BITS-row0);
+        let off = tiles_spanning(row);
+        let tot_rows = tiles_spanning(matrix.rows);
+        for trow in 0..tiles_spanning(bot.rows) {
+            let mut bot_row = &mut bot.tiles[trow*bot.stride .. trow*bot.stride+tcols];
+            row_mul_acc::runtime(&mut bot_row, perm_down, &matrix.tiles[(trow+off-1)*matrix.stride .. (trow+off-1)*matrix.stride+tcols]);
+            if trow+off < tot_rows  {
+                row_mul_acc::runtime(&mut bot_row, perm_up,   &matrix.tiles[(trow+off)*matrix.stride .. (trow+off)*matrix.stride+tcols]);
+            }
+        }
+    } else {
+        /* Memcpy the bottom */
+        let off = tiles_spanning(row);
+        for trow in 0..tiles_spanning(bot.rows) {
+            bot.tiles[trow*bot.stride .. trow*bot.stride+tcols]
+                .copy_from_slice(& matrix.tiles[(trow+off)*matrix.stride .. (trow+off)*matrix.stride+tcols]);
+        }
+    }
+
+    // debug_assert!(top.is_valid());
+    // debug_assert!(bot.is_valid());
+    (top,bot)
+});
 
 /**************************************************************************
  * Partitioning utility

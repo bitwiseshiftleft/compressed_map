@@ -220,4 +220,3 @@ mod nonuniform;
 pub use uniform::{BuildOptions,CompressedRandomMap,ApproxSet,STD_BINCODE_CONFIG};
 pub use nonuniform::{CompressedMap};
 
-use tilematrix::tile;

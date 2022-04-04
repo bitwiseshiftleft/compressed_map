@@ -98,21 +98,9 @@ impl Tile {
         ret
     }
 
-    /** Permute our columns in place */
-    pub fn mut_permute_columns(&mut self, perm: &Permutation) {
-        #[cfg(target_arch="x86_64")]
-        if vectorized_avx2::is_available() { unsafe {
-            vectorized_avx2::mut_permute_columns(self,perm);
-            return ();
-        }}
-
-        #[cfg(target_arch="aarch64")]
-        if vectorized_neon::is_available() { unsafe {
-            vectorized_neon::mut_permute_columns(self,perm);
-            return ();
-        }}
-
-        scalar_core::mut_permute_columns(self,perm);
+    /** Permute our columns in place.  Slow due to vectorization checks */
+    fn mut_permute_columns(&mut self, perm: &Permutation) {
+        tile_mut_permute_columns::runtime(self, perm);
     }
 
     /** Permute our columns out of place */
@@ -120,26 +108,6 @@ impl Tile {
         let mut ret = self;
         ret.mut_permute_columns(perm);
         ret
-    }
-
-    /** Permute our rows out of place */
-    pub fn permute_rows(self, perm: &Permutation) -> Self {
-        self.transpose().permute_columns(perm).transpose()
-    }
-
-    /** Compose permutations */
-    pub fn compose_permutations(perm1: &Permutation, perm2: &Permutation) -> Permutation {
-        #[cfg(target_arch="x86_64")]
-        if vectorized_avx2::is_available() { unsafe {
-            return vectorized_avx2::compose_permutations(perm1,perm2);
-        }}
-
-        #[cfg(target_arch="aarch64")]
-        if vectorized_neon::is_available() { unsafe {
-            return vectorized_neon::compose_permutations(perm1,perm2);
-        }}
-
-        scalar_core::compose_permutations(perm1,perm2)
     }
 
     fn broadcast_row1(storage:Storage, row:Index) -> Storage {
@@ -278,21 +246,6 @@ impl Tile {
                 self.storage[rowb1*LINEAR_DIM+col] = (subb & !mb) | (((suba >> rowa0) << rowb0) & mb);
             }
         }
-    }
-
-    /** Swap col a..a+ncols and cols b..b+ncols */
-    pub fn mut_swap_cols(&mut self, cola:Index, colb:Index, ncols:usize) {
-        let mut perm = PERMUTE_ALL_ZERO;
-        for i in 0..Tile::EDGE_BITS {
-            if i >= cola && i < cola+ncols {
-                perm[i] = (i-cola+colb) as u8;
-            } else if i >= colb && i < colb+ncols {
-                perm[i] = (i-colb+cola) as u8;
-            } else {
-                perm[i] = i as u8;
-            }
-        }
-        self.mut_permute_columns(&perm);
     }
 
     /** Extract self.cols[colb..colb+ncols] as cola..cola+ncols */
@@ -465,8 +418,230 @@ impl Distribution<Tile> for Standard {
     }
 }
 
+/****************************************************************************
+ * Accelerators
+ ****************************************************************************/
+
+/** Methods supplied by vector accelerators */
+pub trait Accelerator where {
+    type MulTable: Clone+Copy;
+    fn is_available() -> bool { false }
+    unsafe fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
+        Scalar::mut_permute_columns(t,permutation)
+    }
+    unsafe fn compile_mul_table(_t:Tile) -> Self::MulTable {
+        unimplemented!()
+    }
+    unsafe fn precomputed_mul(_table: &Self::MulTable, _tv: Tile) -> Tile {
+        unimplemented!()
+    }
+    unsafe fn permute_columns(mut t:Tile, permutation:&Permutation) -> Tile {
+        Self::mut_permute_columns(&mut t,permutation);
+        t
+    }
+
+}
+
+/** SIMD accelerator macro, based on simdeez simd_runtime_generate macro */
+#[macro_use]
+pub mod simd {
+    macro_rules! accelerated {
+    ($vis:vis fn $fn_name:ident ($($arg:ident:$typ:ty),* $(,)? ) $(-> $rt:ty)? $body:block  ) => {
+    $vis mod $fn_name {
+        #[cfg(any(target_arch="aarch64",target_arch="armv7"))]
+        use crate::tilematrix::tile::neon;
+        #[cfg(any(target_arch="x86_64",target_arch="x86"))]
+        use crate::tilematrix::tile::avx2;
+        use crate::tilematrix::tile::{Accelerator,Scalar};
+        use super::*;
+
+        #[allow(dead_code)]
+        #[inline(always)]
+        pub unsafe fn with_accel<Accel:Accelerator>($($arg:$typ,)*) $(-> $rt)? $body
+
+        #[allow(dead_code)]
+        pub fn with_scalar($($arg:$typ,)*) $(-> $rt)? {
+            /* Scalar code isn't really unsafe, so encapsulate here */
+            unsafe { with_accel::<Scalar>($($arg,)*) }
+        }
+            
+        #[allow(dead_code)]
+        #[cfg(any(target_arch="x86_64",target_arch="x86"))]
+        #[target_feature(enable = "avx2")]
+        pub unsafe fn with_avx2($($arg:$typ,)*) $(-> $rt)? {
+            with_accel::<avx2::Avx2>($($arg,)*)
+        }
+
+        #[allow(dead_code)]
+        #[cfg(any(target_arch="aarch64",target_arch="armv7"))]
+        #[target_feature(enable = "neon")]
+        pub unsafe fn with_neon($($arg:$typ,)*) $(-> $rt)? {
+            with_accel::<neon::Neon>($($arg,)*)
+        }
+
+        #[allow(dead_code)]
+        #[inline(always)]
+        pub fn runtime($($arg:$typ,)*) $(-> $rt)? {
+            #[cfg(any(target_arch="aarch64",target_arch="armv7"))]
+            if neon::Neon::is_available() {
+                unsafe { return with_neon($($arg,)*); }
+            }
+            #[cfg(any(target_arch="x86_64",target_arch="x86"))]
+            if avx2::Avx2::is_available() {
+                unsafe { return with_avx2($($arg,)*); }
+            }
+            with_scalar($($arg,)*)
+        }
+    }}}
+
+    #[warn(unused_imports)]
+    pub(crate) use accelerated;
+}
+
+accelerated!(pub fn row_mul_acc(c:&mut [Tile], a:Tile, b:&[Tile]) {
+    /* Row operation: c += a*b, where a is a single tile, and (b,c) are vectors */
+    let len = min(b.len(),c.len());
+    if !a.is_zero() {
+        let a_study = Accel::compile_mul_table(a);
+        for i in 0..len { c[i] ^= Accel::precomputed_mul(&a_study, b[i]); }
+    }
+});
+
+accelerated!(pub fn row_mul(a:Tile, b:&mut [Tile]) {
+    /* Row operation: b = a*b, where a is a single tile, and b is a vector */
+    if a.is_zero() {
+        for i in 0..b.len() { b[i] = Tile::ZERO; }
+    } else {
+        let a_study = Accel::compile_mul_table(a);
+        for i in 0..b.len() { b[i] = Accel::precomputed_mul(&a_study, b[i]); }
+    }
+});
+
+accelerated!(pub fn bulk_swap2_rows(a: &mut [Tile], b: &mut [Tile], ra:Index, rb:Index, nrows: usize) {
+    /* Double-row operation: swap rows ra..ra+nrows from a with rb..rb+nrows from b */
+    let ab = Tile::IDENTITY.extract_cols(rb,ra,nrows);
+    let ba = Tile::IDENTITY.extract_cols(ra,rb,nrows);
+    row_mul_acc::with_accel::<Accel>(a,ab,b);
+    row_mul_acc::with_accel::<Accel>(b,ba,a);
+    row_mul_acc::with_accel::<Accel>(a,ab,b);
+});
+
+accelerated!(pub fn bulk_swap_rows(a: &mut [Tile], ra:Index, rb:Index, nrows: usize) {
+    /* Single-row operation: swap rows ra..ra+nrows with rb..rb+nrows from b */
+    /* Permute columns of the identity; it's equivalent to swapping rows
+     * PERF: could probably accelerate making this permutation
+     */
+    let mut op = Tile::IDENTITY;
+    let mut perm = PERMUTE_ALL_ZERO;
+    for i in 0..Tile::EDGE_BITS {
+        if i >= ra && i < ra+nrows {
+            perm[i] = (i-ra+rb) as u8;
+        } else if i >= rb && i < rb+nrows {
+            perm[i] = (i-rb+ra) as u8;
+        } else {
+            perm[i] = i as u8;
+        }
+    }
+    Accel::mut_permute_columns(&mut op, &perm);
+    let study = Accel::compile_mul_table(op);
+    for i in 0..a.len() { a[i] = Accel::precomputed_mul(&study, a[i]); }
+});
+
+accelerated!(fn tile_mut_permute_columns(t: &mut Tile, p:&Permutation) {
+    /* Permute the columns of t */
+    Accel::mut_permute_columns(t,p);
+});
+
+accelerated!(pub fn bulk_permute_accum_columns(
+    dst: &mut [Tile], dst_stride:usize,
+    src: &[Tile], src_stride:usize,
+    ntiles: usize,
+    p:&Permutation
+) {
+    if ntiles == 0 { return; }
+    assert!((ntiles-1)*dst_stride < dst.len());
+    assert!((ntiles-1)*src_stride < src.len());
+    for i in 0..ntiles {
+        let mut tmp = src[src_stride*i];
+        Accel::mut_permute_columns(&mut tmp, p);
+        dst[dst_stride*i] += tmp;
+    }
+});
+
+accelerated!(pub fn bulk_permute_set_columns(
+    dst: &mut [Tile], dst_stride:usize,
+    src: &[Tile], src_stride:usize,
+    ntiles: usize,
+    p:&Permutation
+) {
+    if ntiles == 0 { return; }
+    assert!((ntiles-1)*dst_stride < dst.len());
+    assert!((ntiles-1)*src_stride < src.len());
+    for i in 0..ntiles {
+        let mut tmp = src[src_stride*i];
+        Accel::mut_permute_columns(&mut tmp, p);
+        dst[dst_stride*i] = tmp;
+    }
+});
+
+/* First column is accum, second is set */
+accelerated!(pub fn bulk_permute_accum2_columns(
+    dst: &mut [Tile], dst_stride:usize,
+    src: &[Tile], src_stride:usize,
+    ntiles: usize,
+    p0:&Permutation,
+    p1:&Permutation
+) {
+    if ntiles == 0 { return; }
+    assert!((ntiles-1)*dst_stride+1 < dst.len());
+    assert!((ntiles-1)*src_stride < src.len());
+    for i in 0..ntiles {
+        /* PERF: do ops like this copy the tiles? */
+        let tmp = src[src_stride*i];
+        let mut t0 = tmp;
+        let mut t1 = tmp;
+        Accel::mut_permute_columns(&mut t0, p0);
+        Accel::mut_permute_columns(&mut t1, p1);
+        dst[dst_stride*i]   += t0;
+        dst[dst_stride*i+1]  = t1;
+    }
+});
+
+/****************************************************************************
+ * Scalar "accelerator"
+ ****************************************************************************/
+pub struct Scalar;
+impl Accelerator for Scalar {
+    type MulTable = Tile;
+
+    #[inline(always)]
+    fn is_available() -> bool { true }
+
+    #[inline(always)]
+    unsafe fn mut_permute_columns(a:&mut Tile, permutation:&Permutation) {
+        let mut ret = Tile::ZERO;
+        for i in 0..Tile::EDGE_BITS {
+            if permutation[i] != PERMUTE_ZERO {
+                ret.mut_xor_col(a,i,permutation[i] as Index);
+            }
+        }
+        *a = ret;
+    }
+
+    #[inline(always)]
+    unsafe fn compile_mul_table(t: Tile) -> Self::MulTable { t }
+
+    #[inline(always)]
+    unsafe fn precomputed_mul(table: &Self::MulTable, t: Tile) -> Tile { *table*t }
+}
+
+/****************************************************************************
+ * Intel AVX2 acceleration
+ ****************************************************************************/
+
 /**************************************************************************
- * Vectorized multiplication.
+ * Vectorized multiplication strategy:
+ *
  * We assume that the compiler is smart enough to vectorize most operations,
  * but here we use a variant of the Method of the Four Russians which is too
  * tricky for the compiler to figure out.
@@ -476,313 +651,198 @@ impl Distribution<Tile> for Standard {
  * this is a linear 8->8 function, which can be decomposed as two 4->8
  * on the nibbles.  These can be computed using two vector permute operations.
  **************************************************************************/
-mod scalar_core {
-    use crate::tile::{Tile,Permutation,PERMUTE_ZERO,PERMUTE_ALL_ZERO,Index};
-    pub fn mut_permute_columns(a:&mut Tile, permutation:&Permutation) {
-        let mut ret = Tile::ZERO;
-        for i in 0..Tile::EDGE_BITS {
-            if permutation[i] != PERMUTE_ZERO {
-                ret.mut_xor_col(a,i,permutation[i] as Index);
-            }
-        }
-        *a = ret;
-    }
-    pub fn compose_permutations(perm1:&Permutation, perm2:&Permutation) -> Permutation {
-        let mut ret = PERMUTE_ALL_ZERO;
-        for i in 0..Tile::EDGE_BITS {
-            if perm1[i] != PERMUTE_ZERO {
-                ret[i] = perm2[perm1[i] as usize];
-            }
-        }
-        ret
-    }
-}
-
 
 #[cfg(target_arch="x86_64")]
-mod vectorized_avx2 {
-    use std::ops::Mul;
-    use crate::tile::{Tile,Permutation,PERMUTE_ZERO,PERMUTE_ALL_ZERO,STORAGE_PER};
+pub mod avx2 {
+    use super::*;
+    #[cfg(target_arch="x86_64")]
     use core::arch::x86_64::*;
+    #[cfg(target_arch="x86")]
+    use core::arch::x86::*;
+    pub struct Avx2;
 
     #[derive(Clone,Copy)]
-    pub struct MulTable {
-        table : [__m256i; 4]
-    }
+    pub struct MulTable { table : [__m256i; 4] }
 
-    #[inline(always)]
-    pub fn is_available() -> bool { is_x86_feature_detected!("avx2") }
+    impl Accelerator for Avx2 {
+        type MulTable = MulTable;
 
-    /** "Permute" columns of the tile according to "permutation".
-     * New column x = old column permutation(x).
-     * ("permutation" need not actually be a permutation)
-     * Any value greater than 0xF (in particular, PERMUTE_ZERO)
-     * will result in the column becoming zero.
-     * 
-     * PERF: adding a permute2 would improve performance for certain column
-     * ops on neon, but possibly not on AVX2
-     */
-    #[inline(always)]
-    pub unsafe fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
-        let addr = permutation as *const u8 as *const __m128i;
-        let vperm = _mm256_loadu2_m128i(addr,addr);
-        let ab = _mm256_loadu_si256(&t.storage[0] as *const u64 as *const __m256i);
-        let ab = _mm256_shuffle_epi8(ab,vperm);
-        _mm256_storeu_si256(&mut t.storage[0] as *mut u64 as *mut __m256i, ab);
-    }
-
-    #[inline(always)]
-    pub unsafe fn compose_permutations(perm1:&Permutation, perm2:&Permutation) -> Permutation {
-        let mut ret:Permutation = PERMUTE_ALL_ZERO;
-        let z = _mm_set1_epi8(PERMUTE_ZERO as i8);
-        let vperm1 = _mm_loadu_si128(perm1 as *const u8 as *const __m128i);
-        let vperm2 = _mm_loadu_si128(perm2 as *const u8 as *const __m128i);
-        let vperm12 = _mm_xor_si128(z,_mm_shuffle_epi8(_mm_xor_si128(z,vperm2),vperm1));
-        _mm_storeu_si128(&mut ret[0] as *mut u8 as *mut __m128i, vperm12);
-        ret
-    }
-
-    /** Precompute multiples of a tile in order to speed up vectorized multiplication */
-    #[inline(always)]
-    pub unsafe fn compile_mul_table(t:Tile) -> MulTable {
-        let mut abcd = _mm256_loadu_si256(&t.storage[0] as *const u64 as *const __m256i);
-        let index = _mm256_set_epi64x(0x0F0E0D0C0B0A0908,0x0706050403020100,
-                                        0x0F0E0D0C0B0A0908,0x0706050403020100);
-        let lane0 = _mm256_setzero_si256();
-        let lane4 = _mm256_set1_epi8(4);
-        let lane8 = _mm256_set1_epi8(8);
-        let lane12 = _mm256_set1_epi8(12);
-        let mut one  = _mm256_set1_epi8(1);
-        let mut aclo = _mm256_setzero_si256();
-        let mut achi = _mm256_setzero_si256();
-        let mut bdlo = _mm256_setzero_si256();
-        let mut bdhi = _mm256_setzero_si256();
-        for _ in 0..4 {
-            let tlo = _mm256_cmpeq_epi8(_mm256_and_si256(index,  one), one);
-            one  = _mm256_slli_epi16(one,1);
-            aclo = _mm256_xor_si256(aclo,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane0),tlo));
-            achi = _mm256_xor_si256(achi,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane4),tlo));
-            bdlo = _mm256_xor_si256(bdlo,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane8),tlo));
-            bdhi = _mm256_xor_si256(bdhi,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane12),tlo));
-            abcd = _mm256_srli_epi64(abcd,8);
-        }
-        let adlo = _mm256_permute2x128_si256(aclo,bdlo,0x30);
-        let adhi = _mm256_permute2x128_si256(achi,bdhi,0x30);
-        let cblo = _mm256_permute2x128_si256(aclo,bdlo,0x21);
-        let cbhi = _mm256_permute2x128_si256(achi,bdhi,0x21);
-        MulTable { table : [ adlo, adhi, cblo, cbhi ] }
-    }
-
-    impl Mul<Tile> for MulTable {
-        type Output = Tile;
-        /* Can't record unsafe on the trait impl.  Make sure we have avx2 before using */
         #[inline(always)]
-        fn mul(self, tv: Tile) -> Tile {
-            unsafe {
-                let mut ret = [0u64; STORAGE_PER];
-                let low_nibble = _mm256_set1_epi8(0xF);
-                let vec = _mm256_loadu_si256(&tv.storage[0] as *const u64 as  *const __m256i);
-                let veclo = _mm256_and_si256(vec, low_nibble);
-                let vechi = _mm256_and_si256(_mm256_srli_epi16(vec,4), low_nibble);
-                let [adlo,adhi,cblo,cbhi] = self.table;
-                let ad = _mm256_xor_si256(_mm256_shuffle_epi8(adlo, veclo),
-                                            _mm256_shuffle_epi8(adhi, vechi));
-                let cb = _mm256_xor_si256(_mm256_shuffle_epi8(cblo, veclo),
-                                            _mm256_shuffle_epi8(cbhi, vechi));
-                let vret = _mm256_xor_si256(_mm256_permute2x128_si256(cb,cb,1), ad);
-                _mm256_storeu_si256(&mut ret[0] as *mut u64 as *mut __m256i, vret);
-                Tile { storage : ret }
+        fn is_available() -> bool { is_x86_feature_detected!("avx2") }
+
+        /** "Permute" columns of the tile according to "permutation".
+        * New column x = old column permutation(x).
+        * ("permutation" need not actually be a permutation)
+        * Any value greater than 0xF (in particular, PERMUTE_ZERO)
+        * will result in the column becoming zero.
+        * 
+        * PERF: adding a permute2 would improve performance for certain column
+        * ops on neon, but possibly not on AVX2
+        */
+        #[inline(always)]
+        unsafe fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
+            let addr = permutation as *const u8 as *const __m128i;
+            let vperm = _mm256_loadu2_m128i(addr,addr);
+            let ab = _mm256_loadu_si256(&t.storage[0] as *const u64 as *const __m256i);
+            let ab = _mm256_shuffle_epi8(ab,vperm);
+            _mm256_storeu_si256(&mut t.storage[0] as *mut u64 as *mut __m256i, ab);
+        }
+
+        /** Precompute multiples of a tile in order to speed up vectorized multiplication */
+        #[inline(always)]
+        unsafe fn compile_mul_table(t:Tile) -> MulTable {
+            let mut abcd = _mm256_loadu_si256(&t.storage[0] as *const u64 as *const __m256i);
+            let index = _mm256_set_epi64x(0x0F0E0D0C0B0A0908,0x0706050403020100,
+                                            0x0F0E0D0C0B0A0908,0x0706050403020100);
+            let lane0 = _mm256_setzero_si256();
+            let lane4 = _mm256_set1_epi8(4);
+            let lane8 = _mm256_set1_epi8(8);
+            let lane12 = _mm256_set1_epi8(12);
+            let mut one  = _mm256_set1_epi8(1);
+            let mut aclo = _mm256_setzero_si256();
+            let mut achi = _mm256_setzero_si256();
+            let mut bdlo = _mm256_setzero_si256();
+            let mut bdhi = _mm256_setzero_si256();
+            for _ in 0..4 {
+                let tlo = _mm256_cmpeq_epi8(_mm256_and_si256(index,  one), one);
+                one  = _mm256_slli_epi16(one,1);
+                aclo = _mm256_xor_si256(aclo,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane0),tlo));
+                achi = _mm256_xor_si256(achi,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane4),tlo));
+                bdlo = _mm256_xor_si256(bdlo,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane8),tlo));
+                bdhi = _mm256_xor_si256(bdhi,  _mm256_and_si256(_mm256_shuffle_epi8(abcd,lane12),tlo));
+                abcd = _mm256_srli_epi64(abcd,8);
             }
+            let adlo = _mm256_permute2x128_si256(aclo,bdlo,0x30);
+            let adhi = _mm256_permute2x128_si256(achi,bdhi,0x30);
+            let cblo = _mm256_permute2x128_si256(aclo,bdlo,0x21);
+            let cbhi = _mm256_permute2x128_si256(achi,bdhi,0x21);
+            MulTable { table : [ adlo, adhi, cblo, cbhi ] }
+        }
+
+
+        #[inline(always)]
+        unsafe fn precomputed_mul(table: &MulTable, tv: Tile) -> Tile {
+            let mut ret = [0u64; STORAGE_PER];
+            let low_nibble = _mm256_set1_epi8(0xF);
+            let vec = _mm256_loadu_si256(&tv.storage[0] as *const u64 as  *const __m256i);
+            let veclo = _mm256_and_si256(vec, low_nibble);
+            let vechi = _mm256_and_si256(_mm256_srli_epi16(vec,4), low_nibble);
+            let [adlo,adhi,cblo,cbhi] = table.table;
+            let ad = _mm256_xor_si256(_mm256_shuffle_epi8(adlo, veclo),
+                                        _mm256_shuffle_epi8(adhi, vechi));
+            let cb = _mm256_xor_si256(_mm256_shuffle_epi8(cblo, veclo),
+                                        _mm256_shuffle_epi8(cbhi, vechi));
+            let vret = _mm256_xor_si256(_mm256_permute2x128_si256(cb,cb,1), ad);
+            _mm256_storeu_si256(&mut ret[0] as *mut u64 as *mut __m256i, vret);
+            Tile { storage : ret }
         }
     }
 }
 
-#[cfg(all(target_arch="aarch64"))]
-mod vectorized_neon {
-    use std::ops::Mul;
-    use crate::tile::{Tile,Permutation,PERMUTE_ZERO,PERMUTE_ALL_ZERO,STORAGE_PER};
+/****************************************************************************
+ * ARM NEON acceleration
+ ****************************************************************************/
+
+#[cfg(any(target_arch="aarch64",target_arch="armv7"))]
+pub mod neon {
+    #[cfg(target_arch="aarch64")]
     use core::arch::aarch64::*;
 
+    #[cfg(target_arch="armv7")]
+    use core::arch::arm::*;
+    use super::*;
+
+    pub struct Neon;
+
     #[derive(Clone,Copy)]
-    pub struct MulTable {
-        table : [(uint8x16_t,uint8x16_t); 4]
-    }
+    struct MulTable { table : [(uint8x16_t,uint8x16_t); 4] }
 
-    /** As far as I know, NEON is mandatory on aarch64 */
-    #[inline(always)]
-    pub fn is_available() -> bool { true }
+    impl Accelerator for Neon {
+        type MulTable = MulTable;
 
-    /** "Permute" columns of the tile according to "permutation".
-     * New column x = old column permutation(x).
-     * ("permutation" need not actually be a permutation)
-     * Any value greater than 0xF (in particular, PERMUTE_ZERO)
-     * will result in the column becoming zero.
-     * 
-     * PERF: adding a permute2 would improve performance for certain column
-     * ops on neon, but possibly not on AVX2
-     */
-    pub unsafe fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
-        let vperm = vld1q_u8(permutation as *const u8);
-        let ab = vreinterpretq_u8_u64(vld1q_u64(&t.storage[0] as *const u64));
-        let cd = vreinterpretq_u8_u64(vld1q_u64(&t.storage[2] as *const u64));
-        let ab = vqtbl1q_u8(ab, vperm);
-        let cd = vqtbl1q_u8(cd, vperm);
-        vst1q_u64(&mut t.storage[0] as *mut u64, vreinterpretq_u64_u8(ab));
-        vst1q_u64(&mut t.storage[2] as *mut u64, vreinterpretq_u64_u8(cd));
-    }
+        /** As far as I know, NEON is mandatory on aarch64 */
+        #[cfg(target_arch="aarch64")]
+        #[inline(always)]
+        fn is_available() -> bool { true }
 
-    pub unsafe fn compose_permutations(perm1:&Permutation, perm2:&Permutation) -> Permutation {
-        let mut ret:Permutation = PERMUTE_ALL_ZERO;
-        let vall   = vdupq_n_u8(PERMUTE_ZERO);
-        let vperm1 = vld1q_u8(perm1 as *const u8);
-        let vperm2 = vld1q_u8(perm2 as *const u8);
-        vst1q_u8(&mut ret[0] as *mut u8, veorq_u8(vall,vqtbl1q_u8(veorq_u8(vall,vperm2),vperm1)));
-        ret
-    }
+        #[cfg(target_arch="armv7")]
+        #[inline(always)]
+        fn is_available() -> bool { is_arm_feature_detected("neon") }
 
-    /** Precompute multiples of a tile in order to speed up vectorized multiplication */
-    pub unsafe fn compile_mul_table(t:Tile) -> MulTable {
-        let mut ab = vld1q_u64(&t.storage[0] as *const u64);
-        let mut cd = vld1q_u64(&t.storage[2] as *const u64);
-        let index_low = vcombine_u8(vcreate_u8(0x0706050403020100),vcreate_u8(0x0F0E0D0C0B0A0908));
-        let mut one  = vdupq_n_u8(1);
-        let mut low0  = vdupq_n_u8(0);
-        let mut high0 = vdupq_n_u8(0);
-        let mut low1  = vdupq_n_u8(0);
-        let mut high1 = vdupq_n_u8(0);
-        let mut low2  = vdupq_n_u8(0);
-        let mut high2 = vdupq_n_u8(0);
-        let mut low3  = vdupq_n_u8(0);
-        let mut high3 = vdupq_n_u8(0);
-        for _ in 0..4 {
-            let tlo = vceqq_u8(vandq_u8(index_low,  one), one);
-            one = vshlq_n_u8(one,1);
-            low0  = veorq_u8(low0,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),0),tlo));
-            high0 = veorq_u8(high0, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),4),tlo));
-            low1  = veorq_u8(low1,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),8),tlo));
-            high1 = veorq_u8(high1, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),12),tlo));
-            ab = vshrq_n_u64(ab,8);
-            low2  = veorq_u8(low2,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),0),tlo));
-            high2 = veorq_u8(high2, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),4),tlo));
-            low3  = veorq_u8(low3,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),8),tlo));
-            high3 = veorq_u8(high3, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),12),tlo));
-            cd = vshrq_n_u64(cd,8);
+        /** "Permute" columns of the tile according to "permutation".
+        * New column x = old column permutation(x).
+        * ("permutation" need not actually be a permutation)
+        * Any value greater than 0xF (in particular, PERMUTE_ZERO)
+        * will result in the column becoming zero.
+        * 
+        * PERF: adding a permute2 would improve performance for certain column
+        * ops on neon, but possibly not on AVX2
+        */
+        #[inline(always)]
+        unsafe fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
+            let vperm = vld1q_u8(permutation as *const u8);
+            let ab = vreinterpretq_u8_u64(vld1q_u64(&t.storage[0] as *const u64));
+            let cd = vreinterpretq_u8_u64(vld1q_u64(&t.storage[2] as *const u64));
+            let ab = vqtbl1q_u8(ab, vperm);
+            let cd = vqtbl1q_u8(cd, vperm);
+            vst1q_u64(&mut t.storage[0] as *mut u64, vreinterpretq_u64_u8(ab));
+            vst1q_u64(&mut t.storage[2] as *mut u64, vreinterpretq_u64_u8(cd));
         }
-        MulTable { table : [ (low0,high0),(low1,high1),(low2,high2),(low3,high3) ] }
-    }
 
-    impl Mul<Tile> for MulTable {
-        type Output = Tile;
-        /* Can't record unsafe on the trait impl.
-         *
-         * This is unsafe in that we might not have NEON, though that can't happen
-         * on any existing AArch64 machines I'm aware of.  Once this is ported to
-         * Armv7, make sure to check that this module is available before using.
-         */
-        fn mul(self, tv: Tile) -> Tile {
-            unsafe {
-                let mut ret = [0u64; STORAGE_PER];
-                let low_nibble = vdupq_n_u8(0xF);
-                let ab = vreinterpretq_u8_u64(vld1q_u64(&tv.storage[0] as *const u64));
-                let cd = vreinterpretq_u8_u64(vld1q_u64(&tv.storage[2] as *const u64));
-                let [(elo,ehi),(flo,fhi),(glo,ghi),(hlo,hhi)] = self.table;
-                let ij = veorq_u8(vqtbl1q_u8(elo, vandq_u8(ab,low_nibble)),
-                                    vqtbl1q_u8(ehi, vshrq_n_u8(ab,4)));
-                let ij = veorq_u8(ij,
-                            veorq_u8(vqtbl1q_u8(flo, vandq_u8(cd,low_nibble)),
-                                    vqtbl1q_u8(fhi, vshrq_n_u8(cd,4))));
-                let kl = veorq_u8(vqtbl1q_u8(glo, vandq_u8(ab,low_nibble)),
-                                    vqtbl1q_u8(ghi, vshrq_n_u8(ab,4)));
-                let kl = veorq_u8(kl,
-                            veorq_u8(vqtbl1q_u8(hlo, vandq_u8(cd,low_nibble)),
-                                    vqtbl1q_u8(hhi, vshrq_n_u8(cd,4))));
-                vst1q_u64(&mut ret[0] as *mut u64, vreinterpretq_u64_u8(ij));
-                vst1q_u64(&mut ret[2] as *mut u64, vreinterpretq_u64_u8(kl));
-                Tile { storage : ret }
+        /** Precompute multiples of a tile in order to speed up vectorized multiplication */
+        #[inline(always)]
+        unsafe fn compile_mul_table(t:Tile) -> MulTable {
+            let mut ab = vld1q_u64(&t.storage[0] as *const u64);
+            let mut cd = vld1q_u64(&t.storage[2] as *const u64);
+            let index_low = vcombine_u8(vcreate_u8(0x0706050403020100),vcreate_u8(0x0F0E0D0C0B0A0908));
+            let mut one  = vdupq_n_u8(1);
+            let mut low0  = vdupq_n_u8(0);
+            let mut high0 = vdupq_n_u8(0);
+            let mut low1  = vdupq_n_u8(0);
+            let mut high1 = vdupq_n_u8(0);
+            let mut low2  = vdupq_n_u8(0);
+            let mut high2 = vdupq_n_u8(0);
+            let mut low3  = vdupq_n_u8(0);
+            let mut high3 = vdupq_n_u8(0);
+            for _ in 0..4 {
+                let tlo = vceqq_u8(vandq_u8(index_low,  one), one);
+                one = vshlq_n_u8(one,1);
+                low0  = veorq_u8(low0,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),0),tlo));
+                high0 = veorq_u8(high0, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),4),tlo));
+                low1  = veorq_u8(low1,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),8),tlo));
+                high1 = veorq_u8(high1, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(ab),12),tlo));
+                ab = vshrq_n_u64(ab,8);
+                low2  = veorq_u8(low2,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),0),tlo));
+                high2 = veorq_u8(high2, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),4),tlo));
+                low3  = veorq_u8(low3,  vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),8),tlo));
+                high3 = veorq_u8(high3, vandq_u8(vdupq_laneq_u8(vreinterpretq_u8_u64(cd),12),tlo));
+                cd = vshrq_n_u64(cd,8);
             }
+            MulTable { table : [ (low0,high0),(low1,high1),(low2,high2),(low3,high3) ] }
+        }
+
+        #[inline(always)]
+        unsafe fn precomputed_mul(table: &MulTable, tv: Tile) -> Tile {
+            let mut ret = [0u64; STORAGE_PER];
+            let low_nibble = vdupq_n_u8(0xF);
+            let ab = vreinterpretq_u8_u64(vld1q_u64(&tv.storage[0] as *const u64));
+            let cd = vreinterpretq_u8_u64(vld1q_u64(&tv.storage[2] as *const u64));
+            let [(elo,ehi),(flo,fhi),(glo,ghi),(hlo,hhi)] = table.table;
+            let ij = veorq_u8(vqtbl1q_u8(elo, vandq_u8(ab,low_nibble)),
+                                vqtbl1q_u8(ehi, vshrq_n_u8(ab,4)));
+            let ij = veorq_u8(ij,
+                        veorq_u8(vqtbl1q_u8(flo, vandq_u8(cd,low_nibble)),
+                                vqtbl1q_u8(fhi, vshrq_n_u8(cd,4))));
+            let kl = veorq_u8(vqtbl1q_u8(glo, vandq_u8(ab,low_nibble)),
+                                vqtbl1q_u8(ghi, vshrq_n_u8(ab,4)));
+            let kl = veorq_u8(kl,
+                        veorq_u8(vqtbl1q_u8(hlo, vandq_u8(cd,low_nibble)),
+                                vqtbl1q_u8(hhi, vshrq_n_u8(cd,4))));
+            vst1q_u64(&mut ret[0] as *mut u64, vreinterpretq_u64_u8(ij));
+            vst1q_u64(&mut ret[2] as *mut u64, vreinterpretq_u64_u8(kl));
+            Tile { storage : ret }
         }
     }
-}
-
-/**************************************************************************
- * Vectorized row operations
- **************************************************************************/
-
-/** Row operation: c += a*b, where a is a single tile, and (b,c) are vectors */
-pub fn row_mul_acc(c:&mut [Tile], a:Tile, b:&[Tile]) {
-    let len = min(b.len(),c.len());
-    if !a.is_zero() {
-        #[cfg(target_arch="x86_64")]
-        if vectorized_avx2::is_available() { unsafe {
-            let a_study = vectorized_avx2::compile_mul_table(a);
-            for i in 0..len { c[i] ^= a_study * b[i]; }
-            return ();
-        }}
-
-        #[cfg(target_arch="aarch64")]
-        if vectorized_neon::is_available() { unsafe {
-            let a_study = vectorized_neon::compile_mul_table(a);
-            for i in 0..len { c[i] ^= a_study * b[i]; }
-            return ();
-        }}
-
-        for i in 0..len { c[i] ^= a * b[i]; }
-    }
-}
-
-/** Row operation: b = a*b, where a is a single tile, and b is a vector */
-pub fn row_mul(a:Tile, b:&mut [Tile]) {
-    if a.is_zero() {
-        for i in 0..b.len() { b[i] = Tile::ZERO; }
-    } else {
-        #[cfg(target_arch="x86_64")]
-        if vectorized_avx2::is_available() { unsafe {
-            let a_study = vectorized_avx2::compile_mul_table(a);
-            for i in 0..b.len() { b[i] = a_study * b[i]; }
-            return ();
-        }}
-
-        #[cfg(target_arch="aarch64")]
-        if vectorized_neon::is_available() { unsafe {
-            let a_study = vectorized_neon::compile_mul_table(a);
-            for i in 0..b.len() { b[i] = a_study * b[i]; }
-            return ();
-        }}
-
-        for i in 0..b.len() { b[i] = a * b[i]; }
-    }
-}
-
-/** Double-row operation: swap rows ra..ra+nrows from a with rb..rb+nrows from b */
-pub fn bulk_swap2_rows(a: &mut [Tile], b: &mut [Tile], ra:Index, rb:Index, nrows: usize) {
-    let ab = Tile::IDENTITY.extract_cols(rb,ra,nrows);
-    let ba = Tile::IDENTITY.extract_cols(ra,rb,nrows);
-
-    row_mul_acc(a,ab,b);
-    row_mul_acc(b,ba,a);
-    row_mul_acc(a,ab,b);
-}
-
-/** Single-row operation: swap rows ra..ra+nrows with rb..rb+nrows from b */
-pub fn bulk_swap_rows(a: &mut [Tile], ra:Index, rb:Index, nrows: usize) {
-    let mut op = Tile::IDENTITY;
-    op.mut_swap_cols(rb,ra,nrows); // swapping rows of id is the same as swapping columns
-
-    #[cfg(target_arch="x86_64")]
-    if vectorized_avx2::is_available() { unsafe {
-        let study = vectorized_avx2::compile_mul_table(op);
-        for i in 0..a.len() { a[i] = study * a[i]; }
-        return ();
-    }}
-
-    #[cfg(target_arch="aarch64")]
-    if vectorized_neon::is_available() { unsafe {
-        let study = vectorized_neon::compile_mul_table(op);
-        for i in 0..a.len() { a[i] = study * a[i]; }
-        return ();
-    }}
-
-    for i in 0..a.len() { a[i] = op * a[i]; }
 }
 
 /**************************************************************************
@@ -790,11 +850,7 @@ pub fn bulk_swap_rows(a: &mut [Tile], ra:Index, rb:Index, nrows: usize) {
  **************************************************************************/
 #[cfg(test)]
 mod tests {
-    use crate::tile::{Edge,Tile,row_mul,row_mul_acc,PERMUTE_ZERO,PERMUTE_ALL_ZERO,scalar_core};
-    #[cfg(target_arch="x86_64")]
-    use crate::tile::vectorized_avx2;
-    #[cfg(target_arch="aarch64")]
-    use crate::tile::vectorized_neon;
+    use super::*;
     use rand::{Rng,thread_rng};
 
     fn random_tile() -> Tile { thread_rng().gen::<Tile>() }
@@ -870,21 +926,12 @@ mod tests {
     #[test]
     fn vectorized() {
         for _ in 0..100 {
-            #[cfg(target_arch="x86_64")]
-            if vectorized_avx2::is_available() { unsafe {
-                let t = random_tile();
-                let u = random_tile();
-                let s = vectorized_avx2::compile_mul_table(t);
-                assert_eq!(s*u,t*u);
-            }}
-
-            #[cfg(target_arch="aarch64")]
-            if vectorized_neon::is_available() { unsafe {
-                let t = random_tile();
-                let u = random_tile();
-                let s = vectorized_neon::compile_mul_table(t);
-                assert_eq!(s*u,t*u);
-            }}
+            let a = random_tile();
+            let t = random_tile();
+            let u = [random_tile()];
+            let mut v = [a];
+            row_mul_acc::runtime(&mut v, t, &u);
+            assert_eq!(v[0], a+t*u[0]);
         }
     }
 
@@ -902,13 +949,13 @@ mod tests {
                 pre[i] = random_tile();
                 opt[i] = pre[i];
             }
-            row_mul_acc(&mut opt,t,&ipt);
+            row_mul_acc::runtime(&mut opt,t,&ipt);
             for i in 0..length {
                 assert_eq!(opt[i], pre[i]+t*ipt[i]);
             }
 
             opt = ipt.clone();
-            row_mul(t,&mut opt);
+            row_mul::runtime(t,&mut opt);
             for i in 0..length {
                 assert_eq!(opt[i], t*ipt[i]);
             }
@@ -923,7 +970,7 @@ mod tests {
             let avail = thread_rng().gen::<Edge>();
             let (psi,perm,ech) = t.pseudoinverse(avail);
             let mut prod = psi * t;
-            scalar_core::mut_permute_columns(&mut prod, &perm);
+            prod.mut_permute_columns(&perm);
             assert_eq!(prod & Tile::IDENTITY, prod);
             for i in 0..Tile::EDGE_BITS {
                 let x = perm[i];
@@ -977,18 +1024,6 @@ mod tests {
                     q[i] = tmp as u8;
                 };
                 assert_eq!(t*&p, t*pmatrix);
-
-
-                #[cfg(target_arch="x86_64")]
-                if vectorized_avx2::is_available() { unsafe {
-                    assert_eq!((t*&p)*&q, t*&vectorized_avx2::compose_permutations(&q,&p));
-                }}
-
-                #[cfg(target_arch="aarch64")]
-                if vectorized_neon::is_available() { unsafe {
-                    assert_eq!((t*&p)*&q, t*&vectorized_neon::compose_permutations(&q,&p));
-                }}
-                assert_eq!((t*&p)*&q, t*&scalar_core::compose_permutations(&q,&p));
             }
         }
     }
