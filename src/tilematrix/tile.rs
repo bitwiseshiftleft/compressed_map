@@ -473,7 +473,15 @@ pub mod simd {
         }
 
         #[allow(dead_code)]
-        #[cfg(any(target_arch="aarch64",target_arch="armv7"))]
+        #[cfg(any(target_arch="aarch64"))]
+        // it always has neon?
+        // #[target_feature(enable = "neon")]
+        pub unsafe fn with_neon($($arg:$typ,)*) $(-> $rt)? {
+            with_accel::<neon::Neon>($($arg,)*)
+        }
+
+        #[allow(dead_code)]
+        #[cfg(any(target_arch="armv7"))]
         #[target_feature(enable = "neon")]
         pub unsafe fn with_neon($($arg:$typ,)*) $(-> $rt)? {
             with_accel::<neon::Neon>($($arg,)*)
@@ -755,7 +763,7 @@ pub mod neon {
     pub struct Neon;
 
     #[derive(Clone,Copy)]
-    struct MulTable { table : [(uint8x16_t,uint8x16_t); 4] }
+    pub struct MulTable { table : [(uint8x16_t,uint8x16_t); 4] }
 
     impl Accelerator for Neon {
         type MulTable = MulTable;

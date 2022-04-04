@@ -7,7 +7,7 @@
 * C / C++ interface / dynamic lib
 * Demo app
 * Examples in doc
-* Make sure it builds automatically with AVX2 when possible
+* Chase down performance regressions on Intel when no march=native (no BMI2? other routines need AVX2?)
 * Distinguish between "out of memory", "can't create thread" etc, and "matrix is not invertible"
 * Deal with overflow cases with billions of items in nonuniform maps, where 0 rounds up to 1.
 
@@ -23,7 +23,7 @@
 
 * Make production-quality (1.0).
 * no_std core for embedded systems
-* Armv7 and x86 support, with NEON / AVX2
+* Test Armv7 and x86 support; add SSSE3 version?
 * Better interface for tile matrices; release as its own crate?
 * Test on very large data sets (eg CompressedRandomMap with 1 billion entries; needs lots of memory to build)
 * Prove correctness; it may also give insights on optimal matrix shapes.
