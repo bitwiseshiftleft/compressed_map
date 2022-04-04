@@ -183,7 +183,8 @@ a matrix `M`, such that `F(k) = M * encode(hash(k)) ^ hash(k)` for each key `k`
 in the map.   The encoding of hashes into vectors chooses two 32-bit blocks with random
 contents, according to a distribution that usually places them near to each other;
 within the blocks the vector is pseudorandom (according to the hash), and elsewhere
-it is zero.
+it is zero.  This is called a frayed ribbon filter because it's similar to
+[ribbon filters](https://engineering.fb.com/2021/07/09/data-infrastructure/ribbon-filter/).
 
 The building process involves solving the linear system constrained by
 `M * encode(hash(k)) ^ hash(k) = v` for all `(k,v)` in the map.  This can be done
