@@ -1,5 +1,6 @@
 # Release items
 
+* Rework README.md
 * Parameterize over hash object?
 * Change usize to be 40 or 48 bits?
 * Enable mmap?
