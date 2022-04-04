@@ -27,6 +27,6 @@ harness = false
 name = "nonuniform"
 harness = false
 
-[profile.release]
-lto = true
+#[profile.release]
+#lto = true
 #panic = "abort"
