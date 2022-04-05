@@ -883,6 +883,7 @@ where Response:From<V> {
      * If (key,v) was included when building the map, then v will be returned.
      * Otherwise, an arbitrary value will be returned.
      */
+    #[inline(always)]
     pub fn query(&self, key: &K) -> V 
     where V:From<Response> {
         self.core.query_hash(key).into()
@@ -894,6 +895,7 @@ where Response:From<V> {
      * If (key,v) was included when building the map, then v will be returned.
      * Otherwise, an arbitrary value will be returned.
      */
+    #[inline(always)]
     pub fn try_query(&self, key: &K) -> Option<V> 
     where V:TryFrom<Response> {
         self.core.query_hash(key).try_into().ok()
