@@ -1,11 +1,16 @@
 # Compressed maps without the keys, based on frayed ribbon cascades
 
-This research-grade library aims to implement space-efficient static functions, with a performance profile suitable for evolutions of [CRLite](https://blog.mozilla.org/security/2020/01/09/crlite-part-2-end-to-end-design/).  Of course, it's probably applicable to other domains.
+This research-grade library aims to implement space-efficient static functions,
+with a performance profile suitable for evolutions of
+[CRLite](https://blog.mozilla.org/security/2020/01/09/crlite-part-2-end-to-end-design/).
+Of course, it's probably applicable to other domains.
 
-Written by Mike Hamburg.  © 2020-2022 Rambus Inc, MIT licensed.  This attic_c code incorporates public-domain SipHash code by Jean-Philippe Aumasson
-and Daniel J. Bernstein; and code based on public-domain Murmur3 code by Peter Scott.
+Written by Mike Hamburg.  © 2020-2022 Rambus Inc, MIT licensed.  This attic_c
+code incorporates public-domain SipHash code by Jean-Philippe Aumasson
+and Daniel J. Bernstein; and code based on public-domain Murmur3 code
+by Peter Scott.
 
-This is a research-grade implementation.  Don't deploy it in production.
+This implementation is still research-grade.  Don't deploy it in production.
 
 ## Static functions, aka CompressedMap
 
