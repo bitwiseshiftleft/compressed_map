@@ -19,8 +19,8 @@ fn criterion_benchmark(crit: &mut Criterion) {
     let mut rng : StdRng = SeedableRng::from_seed(seed);
 
     let mut map = HashMap::new();
-    for _ in 0..yes { map.insert(rng.gen::<[u64;4]>(), true); }
-    for _ in 0..no { map.insert(rng.gen::<[u64;4]>(), false); }
+    for _ in 0..yes { map.insert(rng.gen::<[u8;32]>(), true); }
+    for _ in 0..no { map.insert(rng.gen::<[u8;32]>(), false); }
     let mut query = Vec::with_capacity(yes+no);
     for (k,v) in &map {
         query.push((*k,*v));
@@ -31,7 +31,7 @@ fn criterion_benchmark(crit: &mut Criterion) {
     let mut umap = None;
     crit.bench_function(&format!("nonu build {}+{}",yes,no),
     |crit| crit.iter(|| {
-        umap = CompressedMap::build(&map, &mut options);
+        umap = CompressedMap::<_,_>::build(&map, &mut options);
         assert!(umap.is_some()); /* Assert success */
     }));
 

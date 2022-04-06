@@ -218,6 +218,6 @@ mod tilematrix;
 mod uniform;
 mod nonuniform;
 
-pub use uniform::{BuildOptions,CompressedRandomMap,ApproxSet,STD_BINCODE_CONFIG};
+pub use uniform::{BuildOptions,CompressedRandomMap,ApproxSet,STD_BINCODE_CONFIG,KeyedHasher128,DefaultHasher};
 pub use nonuniform::{CompressedMap};
 

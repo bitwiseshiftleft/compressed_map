@@ -9,11 +9,11 @@
 use crate::tilematrix::matrix::{Matrix,Systematic};
 use crate::tilematrix::bitset::BitSet;
 use core::marker::PhantomData;
-use core::hash::Hash;
+use core::hash::{Hash,Hasher};
 use core::cmp::max;
 use rand::{RngCore};
 use rand::rngs::OsRng;
-use siphasher::sip128::{Hasher128, SipHasher13, Hash128};
+use siphasher::sip128::{Hasher128, SipHasher13, SipHasher24, Hash128};
 
 use bincode::{Encode,BorrowDecode,Decode};
 use bincode::enc::{Encoder};
@@ -42,26 +42,39 @@ use std::borrow::Cow;
 /** Space of responses in dictionary impl. */
 pub type Response = u64;
 
-type LfrHasher = SipHasher13;
+/** Default keyed hasher is SipHash13 */
+pub type DefaultHasher = SipHasher13;
 
 /** A key for the SipHash13 hash function. */
 pub type HasherKey = [u8; 16];
 
 type RowIdx   = u64; // if u32 then limit to ~4b rows
 type BlockIdx = u32;
-pub(crate) type LfrBlock = u32;
+pub(crate) type FrayedBlock = u32;
 
 /** The internal block size of the map, in bytes. */
-pub const BLOCKSIZE : usize = (LfrBlock::BITS as usize) / 8;
+pub const BLOCKSIZE : usize = (FrayedBlock::BITS as usize) / 8;
 const OVERPROVISION : u64 = /* 1/ */ 1024;
 const EXTRA_ROWS : usize = 8;
 
 /** Result of hashing an item */
-#[derive(Copy,Clone,Eq,PartialEq,Ord,PartialOrd,Debug)]
-struct LfrRow {
+#[derive(Copy,Clone,Eq,PartialEq,Debug)]
+struct FrayedRow {
     block_positions : [BlockIdx; 2],
-    block_key       : [LfrBlock; 2],
+    block_key       : [FrayedBlock; 2],
     augmented       : Response
+}
+
+/** A Hasher that takes a 128-bit key and produces 128-bit output */
+pub trait KeyedHasher128: Hasher+Hasher128 {
+    fn new_with_key_128(key: &[u8;16]) -> Self;
+}
+
+impl KeyedHasher128 for SipHasher13 {
+    fn new_with_key_128(key: &[u8;16]) -> Self { Self::new_with_key(key) }
+}
+impl KeyedHasher128 for SipHasher24 {
+    fn new_with_key_128(key: &[u8;16]) -> Self { Self::new_with_key(key) }
 }
 
 /** Domain separator for the hash */
@@ -103,24 +116,6 @@ fn sample_block_positions(
         }
     }
     [a,b]
-}
-
-/** Interpret a hash as a row */
-fn interpret_hash_as_row(hash: Hash128, nblocks:usize) -> LfrRow {
-    let stride_seed = hash.h1 & 0xFFFFFFFF;
-    let a_seed = hash.h1 >> 32;
-    let block_key = [(hash.h2 & 0xFFFFFFFF) as u32, (hash.h2 >> 32) as u32];
-    let augmented = hash.h1.wrapping_add(hash.h2).rotate_left(39) ^ hash.h1;
-    let block_positions = sample_block_positions(stride_seed, a_seed, nblocks as u64);
-    LfrRow { block_positions:block_positions, block_key:block_key, augmented:augmented }
-}
-
-/** The outer-main hash function: hash an object to a LfrRow */
-fn hash_object_to_row<K:Hash> (key: &HasherKey, nblocks:usize, k: &K)-> LfrRow {
-    let mut h = LfrHasher::new_with_key(&key);
-    WhyHashing::HashingInput.hash(&mut h);
-    k.hash(&mut h);
-    interpret_hash_as_row(h.finish128(), nblocks)
 }
 
 #[allow(dead_code)]
@@ -339,7 +334,7 @@ pub fn blocks_required(rows:usize) -> usize {
  * Utility: either generate a fresh hash key, or derive one from an existing
  * key and index.
  */
-pub(crate) fn choose_key(base_key: Option<HasherKey>, n:usize) -> HasherKey {
+pub(crate) fn choose_key<H:KeyedHasher128>(base_key: Option<HasherKey>, n:usize) -> HasherKey {
     match base_key {
         None => {
             let mut key = [0u8; 16];
@@ -347,7 +342,7 @@ pub(crate) fn choose_key(base_key: Option<HasherKey>, n:usize) -> HasherKey {
             key
         },
         Some(key) => {
-            let mut hasher = LfrHasher::new_with_key(&key);
+            let mut hasher = H::new_with_key_128(&key);
             WhyHashing::DerivingNewKey.hash(&mut hasher);
             n.hash(&mut hasher);
             let hash = hasher.finish128();
@@ -360,9 +355,9 @@ pub(crate) fn choose_key(base_key: Option<HasherKey>, n:usize) -> HasherKey {
     }
 }
 
-/** Untyped core of a mapping object. */
-#[derive(Eq,PartialEq,Ord,PartialOrd,Clone,Debug)]
-pub(crate) struct MapCore<'a> {
+/** Arithmetic core of a mapping object. */
+#[derive(Debug)]
+pub(crate) struct MapCore<'a,H=DefaultHasher> {
     /** The SipHash key used to hash inputs. */
     pub(crate) hash_key: HasherKey,
 
@@ -374,9 +369,35 @@ pub(crate) struct MapCore<'a> {
 
     /** The block data itself */
     pub(crate) blocks: Cow<'a, [u8]>,
+
+    /** Placeholder */
+    pub(crate) _phantom: PhantomData<H>
 }
 
-impl<'a> MapCore<'a>  {
+impl <'a,H> PartialEq for MapCore<'a,H> {
+    fn eq(&self,other:&Self) -> bool {
+        self.hash_key == other.hash_key
+        && self.bits_per_value == other.bits_per_value
+        && self.nblocks == other.nblocks
+        && self.blocks == other.blocks
+    }
+}
+impl <'a,H> Eq for MapCore<'a,H> {}
+
+
+impl <'a,H> Clone for MapCore<'a,H> {
+    fn clone(&self) -> Self {
+        MapCore {
+            hash_key: self.hash_key,
+            bits_per_value: self.bits_per_value,
+            nblocks: self.nblocks,
+            blocks: self.blocks.clone(),
+            _phantom: PhantomData::default()
+        }
+    }
+}
+
+impl<'a,H:KeyedHasher128> MapCore<'a,H>  {
     /** Write the core to a new file. */
     pub(crate) fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
         let file = OpenOptions::new().create_new(true).write(true).open(path)?;
@@ -395,7 +416,7 @@ impl<'a> MapCore<'a>  {
         let mut file = File::open(path)?;
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
-        let (unowned,sz) : (MapCore,usize)
+        let (unowned,sz) : (MapCore<H>,usize)
             = bincode::decode_from_slice(&buf, STD_BINCODE_CONFIG)
             .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
         if sz < buf.len() {
@@ -406,88 +427,45 @@ impl<'a> MapCore<'a>  {
     }
 
     /** Take ownership of a core */
-    pub(crate) fn take_ownership<'b>(self) -> MapCore<'b> {
+    pub(crate) fn take_ownership<'b>(self) -> MapCore<'b,H> {
         MapCore {
             hash_key: self.hash_key,
             bits_per_value: self.bits_per_value,
             nblocks: self.nblocks,
-            blocks: Cow::Owned(self.blocks.into_owned())
+            blocks: Cow::Owned(self.blocks.into_owned()),
+            _phantom: PhantomData::default()
         }
     }
-}
-
-/* Encode a usize using 48 bits */
-pub(crate) fn encode_u48<'b,E: Encoder>(u48: usize, encoder: &mut E) -> Result<(), EncodeError> {
-    let as_u64 = u48 as u64;
-    if as_u64 > 1<<48 {
-        return Err(EncodeError::OtherString("usize as u48 is > 48 bits".to_string()));
-    }
-    let bytes = as_u64.to_le_bytes();
-    encoder.writer().write(&bytes[..6])
-}
-
-/* Decode a usize using 48 bits */
-pub(crate) fn decode_u48<'de, D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<usize, DecodeError> {
-    let mut bytes = [0u8;8];
-    decoder.reader().read(&mut bytes[..6])?;
-    let ret_u64 = u64::from_le_bytes(bytes);
-    if usize::BITS < u64::BITS && ret_u64 > usize::MAX as u64 {
-        Err(DecodeError::OtherString("u48 was > size of usize".to_string()))
-    } else {
-        Ok(ret_u64 as usize)
-    }
-}
 
 
-const MAGIC: &[u8;4] = b"cmc1";
-impl <'a> Encode for MapCore<'a> {
-    fn encode<'b,E: Encoder>(&'b self, encoder: &mut E) -> Result<(), EncodeError> {
-        Encode::encode(MAGIC, encoder)?;
-        Encode::encode(&self.hash_key, encoder)?;
-        Encode::encode(&self.bits_per_value, encoder)?;
-        encode_u48(self.nblocks, encoder)?;
-        encoder.writer().write(&self.blocks.as_ref())
-    }
-}
-
-impl <'a, 'de:'a> BorrowDecode<'de> for MapCore<'a> {
-    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let magic : [u8;4] = Decode::decode(decoder)?;
-        if &magic != MAGIC {
-            return Err(DecodeError::OtherString("magic value mismatch".to_string()));
-        }
-
-        let hash_key       = Decode::decode(decoder)?;
-        let bits_per_value = Decode::decode(decoder)?;
-        let nblocks : usize = decode_u48(decoder)?;
-        if nblocks < 2 {
-            return Err(DecodeError::OtherString("bits_per_value must be at least 2".to_string()));
-        } else if bits_per_value == 0 && nblocks != 2 {
-            return Err(DecodeError::OtherString("bits_per_value must be exactly 2 for trivial map".to_string()));
-        }
-        let mul1 : usize = nblocks.checked_mul(BLOCKSIZE)
-            .ok_or(DecodeError::OtherString("overflow on multiply".to_string()))?;
-        let mul2 : usize = mul1.checked_mul(bits_per_value as usize)
-            .ok_or(DecodeError::OtherString("overflow on multiply".to_string()))?;
-        let blocks = decoder.borrow_reader().take_bytes(mul2)?;
-        Ok(MapCore {
-            hash_key: hash_key,
-            bits_per_value: bits_per_value,
-            blocks: Cow::Borrowed(blocks),
-            nblocks: nblocks
-        })
-    }
-}
-
-impl <'a> MapCore<'a> {
     /** Deterministically choose a seed for the given row's output */
     fn seed_row(hash_key: &HasherKey, naug: usize, row:usize) -> [u8; 8] {
-        let mut h = LfrHasher::new_with_key(hash_key);
+        let mut h = H::new_with_key_128(hash_key);
         WhyHashing::RandomizingSolution.hash(&mut h);
         row.hash(&mut h);
         let mut out_as_u64 = h.finish128().h1;
         if naug < 64 { out_as_u64 &= (1<<naug)-1; }
         out_as_u64.to_le_bytes()
+    }
+
+    /** Interpret a hash as a row */
+    #[inline(always)]
+    fn interpret_hash_as_row(hash: Hash128, nblocks:usize) -> FrayedRow {
+        let stride_seed = hash.h1 & 0xFFFFFFFF;
+        let a_seed = hash.h1 >> 32;
+        let block_key = [(hash.h2 & 0xFFFFFFFF) as u32, (hash.h2 >> 32) as u32];
+        let augmented = hash.h1.wrapping_add(hash.h2).rotate_left(39) ^ hash.h1;
+        let block_positions = sample_block_positions(stride_seed, a_seed, nblocks as u64);
+        FrayedRow { block_positions:block_positions, block_key:block_key, augmented:augmented }
+    }
+
+    /** The outer-main hash function: hash an object to a FrayedRow */
+    #[inline(always)]
+    fn hash_object_to_row<K:Hash> (key: &HasherKey, nblocks:usize, k: &K)-> FrayedRow {
+        let mut h = H::new_with_key_128(&key);
+        WhyHashing::HashingInput.hash(&mut h);
+        k.hash(&mut h);
+        Self::interpret_hash_as_row(h.finish128(), nblocks)
     }
 
     /** Solve a hierarchical matrix constructed for the uniform map */
@@ -509,7 +487,7 @@ impl <'a> MapCore<'a> {
                 seed.reserve_rows(load);
                 let empty = [];
                 for row in 0..load {
-                    seed.mut_add_row_as_bytes(&empty, &MapCore::seed_row(&hash_key, naug, row));
+                    seed.mut_add_row_as_bytes(&empty, &Self::seed_row(&hash_key, naug, row));
                 }
                 blocks[halfstride].bwd_solution.write(seed);
             } else {
@@ -533,11 +511,11 @@ impl <'a> MapCore<'a> {
 
     /** Try once to build from an iterator. */
     fn build_from_iter(
-        iter: &mut dyn ExactSizeIterator<Item=LfrRow>,
+        iter: &mut dyn ExactSizeIterator<Item=FrayedRow>,
         bits_per_value:u8,
         hash_key:&HasherKey,
         _max_threads: u8
-    ) -> Option<MapCore<'a>> {
+    ) -> Option<MapCore<'a,H>> {
         if bits_per_value == 0 {
             /* force nblocks to 2 */
             return Some(MapCore{
@@ -545,6 +523,7 @@ impl <'a> MapCore<'a> {
                 bits_per_value: bits_per_value,
                 nblocks: 2,
                 blocks: Cow::Owned(Vec::new()),
+                _phantom: PhantomData::default()
             });
         }
 
@@ -589,7 +568,7 @@ impl <'a> MapCore<'a> {
 
         for (i,(blk,mut row_ids)) in blocks.into_iter().zip(row_ids.into_iter()).enumerate() {
             row_ids.push(RowIdx::MAX); /* Append guard rowidx */
-            block_groups[2*i+1].fwd_solution.write((blk,row_ids,LfrBlock::BITS as usize));
+            block_groups[2*i+1].fwd_solution.write((blk,row_ids,FrayedBlock::BITS as usize));
         }
         for i in nblocks..nblocks_po2 {
             block_groups[2*i+1].fwd_solution.write((Matrix::new(0,0,0),Vec::new(),0));
@@ -645,12 +624,13 @@ impl <'a> MapCore<'a> {
             bits_per_value: bits_per_value,
             blocks: Cow::Owned(core),
             nblocks: nblocks,
-            hash_key: *hash_key
+            hash_key: *hash_key,
+            _phantom: PhantomData::default()
         })
     }
 
     /** Query this map at a given row */
-    fn query(&self, row:LfrRow) -> Response {
+    fn query(&self, row:FrayedRow) -> Response {
         let mut ret = row.augmented;
         if self.bits_per_value < Response::BITS as u8 {
             ret &= (1<<self.bits_per_value) - 1;
@@ -663,8 +643,8 @@ impl <'a> MapCore<'a> {
         let p1_bytes = &self.blocks[p1 .. p1+BLOCKSIZE*naug];
         for bit in 0..naug {
             /* Hopefully this all compiles to just a block access for p0 and for p1 */
-            let get = (LfrBlock::from_le_bytes((&p0_bytes[bit*BLOCKSIZE..(bit+1)*BLOCKSIZE]).try_into().unwrap()) & k0)
-                    ^ (LfrBlock::from_le_bytes((&p1_bytes[bit*BLOCKSIZE..(bit+1)*BLOCKSIZE]).try_into().unwrap()) & k1);
+            let get = (FrayedBlock::from_le_bytes((&p0_bytes[bit*BLOCKSIZE..(bit+1)*BLOCKSIZE]).try_into().unwrap()) & k0)
+                    ^ (FrayedBlock::from_le_bytes((&p1_bytes[bit*BLOCKSIZE..(bit+1)*BLOCKSIZE]).try_into().unwrap()) & k1);
             ret ^= ((get.count_ones() & 1) as Response) << bit;
         }
         ret
@@ -672,7 +652,71 @@ impl <'a> MapCore<'a> {
 
     /** Query this map at the hash of a given key */
     pub(crate) fn query_hash<K:Hash>(&self, key: &K) -> Response {
-        self.query(hash_object_to_row(&self.hash_key, self.nblocks, key))
+        self.query(Self::hash_object_to_row(&self.hash_key, self.nblocks, key))
+    }
+}
+
+/* Encode a usize using 48 bits */
+pub(crate) fn encode_u48<'b,E: Encoder>(u48: usize, encoder: &mut E) -> Result<(), EncodeError> {
+    let as_u64 = u48 as u64;
+    if as_u64 > 1<<48 {
+        return Err(EncodeError::OtherString("usize as u48 is > 48 bits".to_string()));
+    }
+    let bytes = as_u64.to_le_bytes();
+    encoder.writer().write(&bytes[..6])
+}
+
+/* Decode a usize using 48 bits */
+pub(crate) fn decode_u48<'de, D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<usize, DecodeError> {
+    let mut bytes = [0u8;8];
+    decoder.reader().read(&mut bytes[..6])?;
+    let ret_u64 = u64::from_le_bytes(bytes);
+    if usize::BITS < u64::BITS && ret_u64 > usize::MAX as u64 {
+        Err(DecodeError::OtherString("u48 was > size of usize".to_string()))
+    } else {
+        Ok(ret_u64 as usize)
+    }
+}
+
+
+const MAGIC: &[u8;4] = b"cmc1";
+impl <'a,H> Encode for MapCore<'a,H> {
+    fn encode<'b,E: Encoder>(&'b self, encoder: &mut E) -> Result<(), EncodeError> {
+        Encode::encode(MAGIC, encoder)?;
+        Encode::encode(&self.hash_key, encoder)?;
+        Encode::encode(&self.bits_per_value, encoder)?;
+        encode_u48(self.nblocks, encoder)?;
+        encoder.writer().write(&self.blocks.as_ref())
+    }
+}
+
+impl <'a, 'de:'a, H> BorrowDecode<'de> for MapCore<'a,H> {
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let magic : [u8;4] = Decode::decode(decoder)?;
+        if &magic != MAGIC {
+            return Err(DecodeError::OtherString("magic value mismatch".to_string()));
+        }
+
+        let hash_key       = Decode::decode(decoder)?;
+        let bits_per_value = Decode::decode(decoder)?;
+        let nblocks : usize = decode_u48(decoder)?;
+        if nblocks < 2 {
+            return Err(DecodeError::OtherString("bits_per_value must be at least 2".to_string()));
+        } else if bits_per_value == 0 && nblocks != 2 {
+            return Err(DecodeError::OtherString("bits_per_value must be exactly 2 for trivial map".to_string()));
+        }
+        let mul1 : usize = nblocks.checked_mul(BLOCKSIZE)
+            .ok_or(DecodeError::OtherString("overflow on multiply".to_string()))?;
+        let mul2 : usize = mul1.checked_mul(bits_per_value as usize)
+            .ok_or(DecodeError::OtherString("overflow on multiply".to_string()))?;
+        let blocks = decoder.borrow_reader().take_bytes(mul2)?;
+        Ok(MapCore {
+            hash_key: hash_key,
+            bits_per_value: bits_per_value,
+            blocks: Cow::Borrowed(blocks),
+            nblocks: nblocks,
+            _phantom: PhantomData::default()
+        })
     }
 }
 
@@ -803,22 +847,32 @@ fn next_power_of_2_ge(x:usize) -> usize {
  * because it doesn't actually hold its values, so it can't return references
  * to them.
  */
-#[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Encode)]
-pub struct CompressedRandomMap<'a,K,V> {
+#[derive(Debug)]
+pub struct CompressedRandomMap<'a,K,V,H=DefaultHasher> {
     /** Untyped map object, consulted after hashing. */
-    pub(crate) core: MapCore<'a>,
+    pub(crate) core: MapCore<'a,H>,
 
     /** Phantom to hold the types of K,V */
-    _phantom: PhantomData<(K,V)>
+    _phantom: PhantomData<(K,V,H)>
 }
+impl <'a,K,V,H> PartialEq for CompressedRandomMap<'a,K,V,H> {
+    fn eq(&self,other:&Self) -> bool { self.core == other.core }
+}
+impl <'a,K,V,H> Eq for CompressedRandomMap<'a,K,V,H> {}
 
-impl <'a,K,V> Clone for CompressedRandomMap<'a,K,V> {
+impl <'a,K,V,H> Clone for CompressedRandomMap<'a,K,V,H> {
     fn clone(&self) -> Self {
         CompressedRandomMap { core: self.core.clone(), _phantom:PhantomData::default() }
     }
 }
 
-impl <'a,K:Hash,V:Copy> CompressedRandomMap<'a,K,V>
+impl <'a,K,V,H> Encode for CompressedRandomMap<'a,K,V,H> {
+    fn encode<'b,E: Encoder>(&'b self, encoder: &mut E) -> Result<(), EncodeError> {
+        Encode::encode(&self.core, encoder)
+    }
+}
+
+impl <'a,K:Hash,V:Copy,H:KeyedHasher128> CompressedRandomMap<'a,K,V,H>
 where Response:From<V> {
     /**
      * Build a uniform map.
@@ -850,17 +904,17 @@ where Response:From<V> {
         };
 
         for try_num in options.try_num..options.max_tries {
-            let hkey = choose_key(options.key_gen, try_num);
+            let hkey = choose_key::<H>(options.key_gen, try_num);
             let iter1 = map.into_iter();
             let nblocks = blocks_required(iter1.len());
             let mut iter = iter1.map(|(k,v)| {
-                let mut row = hash_object_to_row(&hkey,nblocks,k);
+                let mut row = MapCore::<H>::hash_object_to_row(&hkey,nblocks,k);
                 row.augmented ^= Response::from(*v) >> options.shift;
                 row
             });
 
             /* Solve it! (with type-independent code) */
-            if let Some(solution) = MapCore::build_from_iter(
+            if let Some(solution) = MapCore::<H>::build_from_iter(
                 &mut iter,
                 bits_per_value,
                 &hkey,
@@ -908,7 +962,7 @@ where Response:From<V> {
      * [`borrow_decode`](bincode::BorrowDecode::borrow_decode), but want to
      * own the data independently.
      */
-    pub fn take_ownership<'b>(self) -> CompressedRandomMap<'b,K,V> {
+    pub fn take_ownership<'b>(self) -> CompressedRandomMap<'b,K,V,H> {
         CompressedRandomMap { core: self.core.take_ownership(), _phantom:PhantomData::default() }
     }
 
@@ -937,7 +991,7 @@ where Response:From<V> {
     }
 }
 
-impl <'a, 'de:'a, K,V> BorrowDecode<'de> for CompressedRandomMap<'a,K,V> {
+impl <'a, 'de:'a, K,V,H> BorrowDecode<'de> for CompressedRandomMap<'a,K,V,H> {
     fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
         Ok(CompressedRandomMap{
             core: BorrowDecode::borrow_decode(decoder)?,
@@ -968,16 +1022,26 @@ impl <'a, 'de:'a, K,V> BorrowDecode<'de> for CompressedRandomMap<'a,K,V> {
  * Internally, an [`ApproxSet`] is just a [`CompressedRandomMap`]
  * which maps all the elements of the set to zero.
  */
- #[derive(Eq,PartialEq,Ord,PartialOrd,Debug,Encode)]
- pub struct ApproxSet<'a,K> {
+ #[derive(Debug)]
+ pub struct ApproxSet<'a,K,H=DefaultHasher> {
      /** Untyped map object, consulted after hashing. */
-     core: MapCore<'a>,
+     core: MapCore<'a,H>,
  
      /** Phantom to hold the type of K */
      _phantom: PhantomData<K>,
  }
+ impl <'a,K,H> PartialEq for ApproxSet<'a,K,H> {
+     fn eq(&self,other:&Self) -> bool { self.core == other.core }
+ }
+ impl <'a,K,H> Eq for ApproxSet<'a,K,H> {}
  
- impl <'a, 'de:'a, K> BorrowDecode<'de> for ApproxSet<'a,K> {
+ impl <'a,K,H> Encode for ApproxSet<'a,K,H> {
+    fn encode<'b,E: Encoder>(&'b self, encoder: &mut E) -> Result<(), EncodeError> {
+        Encode::encode(&self.core, encoder)
+    }
+}
+
+ impl <'a, 'de:'a, K,H> BorrowDecode<'de> for ApproxSet<'a,K,H> {
      fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
          Ok(ApproxSet{
              core: BorrowDecode::borrow_decode(decoder)?,
@@ -986,13 +1050,13 @@ impl <'a, 'de:'a, K,V> BorrowDecode<'de> for CompressedRandomMap<'a,K,V> {
      }
  }
  
- impl <'a,K> Clone for ApproxSet<'a,K> {
+ impl <'a,K,H> Clone for ApproxSet<'a,K,H> {
      fn clone(&self) -> Self {
          ApproxSet { core: self.core.clone(), _phantom:PhantomData::default() }
      }
  }
 
-impl <'a,K:Hash> ApproxSet<'a,K> {
+impl <'a,K:Hash,H:KeyedHasher128> ApproxSet<'a,K,H> {
     /** Default bits per value if none is specified. */
     const DEFAULT_BITS_PER_VALUE : u8 = 8;
 
@@ -1025,13 +1089,13 @@ impl <'a,K:Hash> ApproxSet<'a,K> {
         };
 
         for try_num in options.try_num..options.max_tries {
-            let hkey = choose_key(options.key_gen, try_num);
+            let hkey = choose_key::<H>(options.key_gen, try_num);
             let iter1 = set.into_iter();
             let nblocks = blocks_required(iter1.len());
-            let mut iter = iter1.map(|k| hash_object_to_row(&hkey,nblocks,k) );
+            let mut iter = iter1.map(|k| MapCore::<H>::hash_object_to_row(&hkey,nblocks,k) );
 
             /* Solve it! (with type-independent code) */
-            if let Some(solution) = MapCore::build_from_iter(
+            if let Some(solution) = MapCore::<H>::build_from_iter(
                 &mut iter,
                 bits_per_value,
                 &hkey,
@@ -1064,7 +1128,7 @@ impl <'a,K:Hash> ApproxSet<'a,K> {
      * [`borrow_decode`](bincode::BorrowDecode::borrow_decode), but want to
      * own the data independently.
      */
-    pub fn take_ownership<'b>(self) -> ApproxSet<'b,K> {
+    pub fn take_ownership<'b>(self) -> ApproxSet<'b,K,H> {
         ApproxSet { core: self.core.take_ownership(), _phantom:PhantomData::default() }
     }
 
@@ -1144,7 +1208,7 @@ mod tests {
                 set.insert(rng.gen::<u64>());
             }
             
-            let approxset = ApproxSet::build(&set, &mut BuildOptions::default()).unwrap();
+            let approxset = ApproxSet::<_>::build(&set, &mut BuildOptions::default()).unwrap();
             for k in set.iter() {
                 assert_eq!(approxset.probably_contains(&k), true);
             }

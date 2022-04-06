@@ -1,22 +1,24 @@
 # Release items
 
-* Rework README.md
-* Parameterize over hash object?
-* Enable mmap?
 * C / C++ interface / dynamic lib
 * Demo app
 * Examples in doc
-* Chase down performance regressions on Intel when no march=native (no BMI2? other routines need AVX2?)
+
+# Post 0.2 quality items
+
 * Distinguish between "out of memory", "can't create thread" etc, and "matrix is not invertible"
 * Deal with overflow cases with billions of items in nonuniform maps, where 0 rounds up to 1.
+* Enable mmap?
 
 # Performance
 
+* Why is SipHasher so slow on Intel?
 * Multithread hashing even if we aren't multithreading bucketsort.  (Using Rayon??)
 * Improve optimization of the threaded version
 * Improve pseudoinverse
 * More profile-driven optimization
 * Compare which parts are still faster in C
+* Somehow LTO speeds up nonuniform maps but regresses uniform query.
 
 # Longer term
 

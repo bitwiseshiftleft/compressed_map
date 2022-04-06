@@ -40,7 +40,7 @@ fn criterion_benchmark(crit: &mut Criterion) {
         crit.bench_function(&format!("uniform build {}",size),
             |crit| crit.iter(|| {
                 options.try_num = 0;
-                umap = CompressedRandomMap::build(&map, &mut options);
+                umap = CompressedRandomMap::<_,_>::build(&map, &mut options);
                 assert!(umap.is_some()); /* Assert success */
                 total_tries += options.try_num + 1;
                 total_builds += 1;
@@ -93,7 +93,7 @@ fn criterion_benchmark_slow(crit: &mut Criterion) {
         crit.bench_function(&format!("uniform build {}",size),
             |crit| crit.iter(|| {
                 options.try_num = 0;
-                umap = CompressedRandomMap::build(&map, &mut options);
+                umap = CompressedRandomMap::<_,_>::build(&map, &mut options);
                 assert!(umap.is_some()); /* Assert success */
                 total_tries += options.try_num + 1;
                 total_builds += 1;

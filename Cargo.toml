@@ -36,8 +36,8 @@ harness = false
 name = "nonuniform"
 harness = false
 
-[profile.bench]
+#[profile.bench]
 
 #[profile.release]
-lto = true
+#lto = true
 #panic = "abort"

@@ -7,7 +7,8 @@
  */
 
 use crate::uniform::{MapCore,CompressedRandomMap,BuildOptions,
-    choose_key,BLOCKSIZE,STD_BINCODE_CONFIG,encode_u48,decode_u48};
+    choose_key,BLOCKSIZE,STD_BINCODE_CONFIG,encode_u48,decode_u48,
+    DefaultHasher,KeyedHasher128};
 use crate::tilematrix::bitset::{BitSet,BitSetIterator};
 use std::collections::HashMap;
 use core::marker::PhantomData;
@@ -156,16 +157,26 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
  * at most 11% more space than the Shannon entropy of `D`, plus the size of
  * the values themselves.
  */
-#[derive(Eq,PartialEq,Ord,PartialOrd,Debug)]
-pub struct CompressedMap<'a,K,V> {
+#[derive(Debug)]
+pub struct CompressedMap<'a,K,V,H=DefaultHasher> {
     plan: Plan,
     response_map: ResponseMap<V>,
     salt: Vec<u8>,
-    core: Vec<MapCore<'a>>,
+    core: Vec<MapCore<'a,H>>,
     _phantom: PhantomData<K>
 }
 
-impl <'a,K,V> Clone for CompressedMap<'a,K,V> where V:Clone {
+impl <'a,K,V:PartialEq,H> PartialEq for CompressedMap<'a,K,V,H> {
+    fn eq(&self,other:&Self) -> bool {
+        self.plan == other.plan
+        && self.response_map == other.response_map
+        && self.salt == other.salt
+        && self.core == other.core
+    }
+}
+impl <'a,K,V:Eq,H> Eq for CompressedMap<'a,K,V,H> {}
+
+impl <'a,K,V,H> Clone for CompressedMap<'a,K,V,H> where V:Clone {
     fn clone(&self) -> Self {
         CompressedMap{
             plan:self.plan,
@@ -177,7 +188,7 @@ impl <'a,K,V> Clone for CompressedMap<'a,K,V> where V:Clone {
     }
 }
 
-impl <'a,K:Hash,V> CompressedMap<'a,K,V> {
+impl <'a,K:Hash,V,H:KeyedHasher128> CompressedMap<'a,K,V,H> {
     /**
      * Build a nonuniform map.
      *
@@ -309,7 +320,7 @@ impl <'a,K:Hash,V> CompressedMap<'a,K,V> {
             filter: BitSet::with_capacity(total)
         };
         let mut salt = Vec::new();
-        let mut core : Vec<MapCore> = Vec::new();
+        let mut core : Vec<MapCore<H>> = Vec::new();
         let mut tries = options.try_num;
 
         /* Phase by phase */
@@ -342,7 +353,7 @@ impl <'a,K:Hash,V> CompressedMap<'a,K,V> {
             }
 
             /* Solve the phase */
-            let phase_map = CompressedRandomMap::<K,Locator>::build::<FilteredVec<K>>(&phase_care, &mut phase_options)?;
+            let phase_map = CompressedRandomMap::<K,Locator,H>::build::<FilteredVec<K>>(&phase_care, &mut phase_options)?;
             tries += phase_options.try_num as usize;
             salt.push(phase_options.try_num as u8);
             if phase >= min_phase_affecting_omo && phase < phase_omo {
@@ -374,6 +385,7 @@ impl <'a,K:Hash,V> CompressedMap<'a,K,V> {
         }
     }
 
+    #[inline]
     pub fn query<'b>(&'b self, key:&K) -> &'b V {
         let nphases = self.core.len();
         let mut locator = 0 as Locator;
@@ -420,7 +432,7 @@ impl <'a,K:Hash,V> CompressedMap<'a,K,V> {
      * [`borrow_decode`](bincode::BorrowDecode::borrow_decode), but want to
      * own the data independently.
      */
-    pub fn take_ownership<'b>(self) -> CompressedMap<'b,K,V> {
+    pub fn take_ownership<'b>(self) -> CompressedMap<'b,K,V,H> {
         CompressedMap { 
             plan: self.plan,
             response_map: self.response_map,
@@ -461,7 +473,7 @@ impl <'a,K:Hash,V> CompressedMap<'a,K,V> {
         let mut file = File::open(path)?;
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
-        let (unowned,sz) : (CompressedMap<K,V>,usize)
+        let (unowned,sz) : (CompressedMap<K,V,H>,usize)
             = bincode::decode_from_slice(&buf, STD_BINCODE_CONFIG)
             .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
         if sz < buf.len() {
@@ -474,7 +486,7 @@ impl <'a,K:Hash,V> CompressedMap<'a,K,V> {
 
 const MAGIC: &[u8;4] = b"cnm1";
 
-impl <'a,K,V> Encode for CompressedMap<'a,K,V> where V: Encode {
+impl <'a,K,V:Encode,H> Encode for CompressedMap<'a,K,V,H> {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
         Encode::encode(MAGIC, encoder)?;
 
@@ -508,7 +520,7 @@ impl <'a,K,V> Encode for CompressedMap<'a,K,V> where V: Encode {
     }
 }
 
-impl <'a,'de:'a,K,V> BorrowDecode<'de> for CompressedMap<'a,K,V> where V: BorrowDecode<'de> {
+impl <'a,'de:'a,K,V,H:KeyedHasher128> BorrowDecode<'de> for CompressedMap<'a,K,V,H> where V: BorrowDecode<'de> {
     fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
         /* Decode the response map */
         fn err<Nope>(descr: &'static str) -> Result<Nope, DecodeError> {
@@ -562,7 +574,7 @@ impl <'a,'de:'a,K,V> BorrowDecode<'de> for CompressedMap<'a,K,V> where V: Borrow
 
         /* The vectors for the cores */
         if nphases > 0 && (nphases != salt.len()+1) { return err("salt has the wrong length"); } /* TODO: unredund this */
-        let mut core : Vec<MapCore> = Vec::with_capacity(nphases);
+        let mut core : Vec<MapCore<H>> = Vec::with_capacity(nphases);
         let mut hashcur = hash_key;
         let mut cur_plan = plan;
         for phase in 0..nphases {
@@ -583,12 +595,13 @@ impl <'a,'de:'a,K,V> BorrowDecode<'de> for CompressedMap<'a,K,V> where V: Borrow
                 hash_key: hashcur,
                 bits_per_value: bpv as u8,
                 nblocks: nblocks,
-                blocks: Cow::Borrowed(borrowed)
+                blocks: Cow::Borrowed(borrowed),
+                _phantom: PhantomData::default()
             });
 
             /* update hash key according to salt */
             if phase < salt.len() {
-                hashcur = choose_key(Some(hashcur), salt[phase] as usize);
+                hashcur = choose_key::<H>(Some(hashcur), salt[phase] as usize);
             }
         }
 
@@ -655,7 +668,7 @@ mod tests {
 
     #[test]
     fn test_nonuniform_map() {
-        assert!(CompressedMap::build(&HashMap::<u32,u32>::new(), &mut BuildOptions::default()).is_none());
+        assert!(CompressedMap::<_,_>::build(&HashMap::<u32,u32>::new(), &mut BuildOptions::default()).is_none());
         for i in 0u32..100 {
             let mut seed = [0u8;32];
             seed[0..4].copy_from_slice(&i.to_le_bytes());
