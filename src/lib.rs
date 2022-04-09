@@ -1,3 +1,11 @@
+/*
+ * @file lib.rs
+ * @author Mike Hamburg
+ * @copyright 2020-2022 Rambus Inc.
+ *
+ * Library main.
+ */
+
 /*!
 Compressed mapping objects, also known as "static functions".
 
@@ -218,6 +226,12 @@ mod tilematrix;
 mod uniform;
 mod nonuniform;
 
+#[cfg(feature="cffi")]
+mod cffi;
+
+mod size;
+
 pub use uniform::{BuildOptions,CompressedRandomMap,ApproxSet,STD_BINCODE_CONFIG,KeyedHasher128,DefaultHasher};
 pub use nonuniform::{CompressedMap};
+pub use size::{serialized_size};
 

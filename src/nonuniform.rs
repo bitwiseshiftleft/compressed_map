@@ -136,27 +136,25 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
     (plan, value_map, interval_vec, resp)
 }
 
-/**
- * Compressed static functions.
- * 
- * These provide a compressed and efficiently queryable map from `K` to `V`,
- * somewhat like a [`HashMap<K,V>`](std::collections::hash_map).  However, unlike
- * a [`HashMap`](std::collections::hash_map), they do not store the keys.  So it
- * is not possible to list the keys of a [`CompressedMap`].  They also don't give
- * an error if when a key not in the map is queried: instead, a random value is
- * returned.  As a result, [`CompressedMap`]s can't be constructed from an empty
- * map.
- *
- * [`CompressedMap`] implements [`Index`](core::ops::Index), so you can use
- * `map[k]` notation.
- *
- * These maps are optimized for the case when there are only a few different
- * values, but millions of keys.
- *
- * Asymptotically, for any distribution `D` of values, [`CompressedMap`]s use
- * at most 11% more space than the Shannon entropy of `D`, plus the size of
- * the values themselves.
- */
+/// Compressed static functions.
+/// 
+/// These provide a compressed and efficiently queryable map from `K` to `V`,
+/// somewhat like a [`HashMap<K,V>`](std::collections::hash_map).  However, unlike
+/// a [`HashMap`](std::collections::hash_map), they do not store the keys.  So it
+/// is not possible to list the keys of a [`CompressedMap`].  They also don't give
+/// an error if when a key not in the map is queried: instead, a random value is
+/// returned.  As a result, [`CompressedMap`]s can't be constructed from an empty
+/// map.
+/// 
+/// [`CompressedMap`] implements [`Index`](core::ops::Index), so you can use
+/// `map[k]` notation.
+/// 
+/// These maps are optimized for the case when there are only a few different
+/// values, but millions of keys.
+/// 
+/// Asymptotically, for any distribution `D` of values, [`CompressedMap`]s use
+/// at most 11% more space than the Shannon entropy of `D`, plus the size of
+/// the values themselves.
 #[derive(Debug)]
 pub struct CompressedMap<'a,K,V,H=DefaultHasher> {
     plan: Plan,

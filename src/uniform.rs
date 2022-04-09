@@ -826,27 +826,25 @@ fn next_power_of_2_ge(x:usize) -> usize {
     1 << (usize::BITS - (x-1).leading_zeros())
 }
 
-/**
- * Compressed uniform static functions.
- * 
- * These objects work like [`CompressedMap`](crate::CompressedMap)s,
- * but they do not support arbitrary values as objects and do not
- * store their values.  Instead, they require the values to be integers
- * (or other objects implementing [`Into<u64>`](std::convert::Into) and
- * [`TryFrom<u64>`](std::convert::TryFrom)).
- * 
- * The design is efficient
- * if these integers are approximately uniformly random up to some bit size,
- * e.g. if they are random in `0..128`.  Unlike a [`CompressedMap`](crate::CompressedMap), a
- * [`CompressedRandomMap`] cannot take advantage of any bias in the distribution
- * of its values.
- *
- * [`CompressedRandomMap`] is building block for [`CompressedMap`](crate::CompressedMap).
- *
- * [`CompressedRandomMap`] doesn't implement [`Index`](core::ops::Index),
- * because it doesn't actually hold its values, so it can't return references
- * to them.
- */
+/// Compressed uniform static functions.
+/// 
+/// These objects work like [`CompressedMap`](crate::CompressedMap)s,
+/// but they do not support arbitrary values as objects and do not
+/// store their values.  Instead, they require the values to be integers
+/// (or other objects implementing [`Into<u64>`](std::convert::Into) and
+/// [`TryFrom<u64>`](std::convert::TryFrom)).
+/// 
+/// The design is efficient
+/// if these integers are approximately uniformly random up to some bit size,
+/// e.g. if they are random in `0..128`.  Unlike a [`CompressedMap`](crate::CompressedMap), a
+/// [`CompressedRandomMap`] cannot take advantage of any bias in the distribution
+/// of its values.
+/// 
+/// [`CompressedRandomMap`] is building block for [`CompressedMap`](crate::CompressedMap).
+/// 
+/// [`CompressedRandomMap`] doesn't implement [`Index`](core::ops::Index),
+/// because it doesn't actually hold its values, so it can't return references
+/// to them.
 #[derive(Debug)]
 pub struct CompressedRandomMap<'a,K,V,H=DefaultHasher> {
     /** Untyped map object, consulted after hashing. */

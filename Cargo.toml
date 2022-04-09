@@ -8,16 +8,23 @@ readme = "README.md"
 repository = "https://github.com/bitwiseshiftleft/compressed_map"
 categories = ["data-structures", "compression"]
 include = ["/src", "/benches", "LICENSE.txt"]
+build = "build.rs" # for cbindgen
+
+[lib]
+crate-type = ["cdylib"]
+bench = false
 
 [badges]
 maintenance = { status = "experimental" }
 
 [features]
+default = ["cffi"]
 threading = []
+cffi      = []
 
 [dependencies]
 # TODO: pin hashes
-siphasher = "0.3"
+siphasher = "0.3.10"
 bincode = "2.0.0-RC.1"
 rand = "0.8.5"
 
@@ -35,6 +42,9 @@ harness = false
 [[bench]]
 name = "nonuniform"
 harness = false
+
+[build-dependencies]
+cbindgen = "0.21.0"
 
 #[profile.bench]
 
