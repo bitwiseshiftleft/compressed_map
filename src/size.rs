@@ -8,6 +8,7 @@
 
 use bincode::{Encode,config::Config,enc::EncoderImpl,error::EncodeError,enc::write::Writer};
 
+/** Writer which only counts the bytes "written" to it */
 struct SizeOnlyWriter<'a> {
     bytes_written: &'a mut usize
 }

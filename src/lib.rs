@@ -175,6 +175,8 @@ Serialization of maps is provided using the [`bincode`] crate.  All of [`Compres
 [`ApproxSet`], [`CompressedRandomMap`] implement
 [`Encode`](bincode::enc::Encode) and [`BorrowDecode`](bincode::de::BorrowDecode).  Once
 you `BorrowDecode` the object, you can take extend the lifetime with `take_ownership`.
+Because `bincode` doesn't provide a serialized size anymore, this crate exports
+[`serialized_size`] to give the size of an [`Encode`](bincode::enc::Encode) object.
 
 For compatibility, simplicity and speed, please use the [`STD_BINCODE_CONFIG`] when
 calling `bincode`'s serializers.  That way all the u32's won't get recode in varint format.

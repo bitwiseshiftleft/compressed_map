@@ -11,6 +11,8 @@ and Daniel J. Bernstein; and code based on public-domain Murmur3 code
 by Peter Scott.
 
 This implementation is still research-grade.  Don't deploy it in production.
+In particular, it depends on `bincode` version 2.0.0-RC.1, which may have
+significant changes before release.
 
 ## Static functions, aka CompressedMap
 
