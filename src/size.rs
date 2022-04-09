@@ -3,7 +3,7 @@
  * @author Mike Hamburg
  * @copyright 2020-2022 Rambus Inc.
  *
- * Get size of serialized object.  Should be part of bincode, dunno why it isn't.
+ * Get size of serialized object.
  */
 
 use bincode::{Encode,config::Config,enc::EncoderImpl,error::EncodeError,enc::write::Writer};

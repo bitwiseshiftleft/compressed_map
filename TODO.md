@@ -1,7 +1,7 @@
 # Release items
 
-* C / C++ interface / dynamic lib
-* Demo app
+* C interface / dylib: deserialize, save/load file, map with bytes output
+* Demo apps
 * Examples in doc
 
 # Post 0.2 quality items
@@ -12,6 +12,7 @@
 
 # Performance
 
+* Reduce C dylib size?
 * Why is SipHasher so slow on Intel?
 * Multithread hashing even if we aren't multithreading bucketsort.  (Using Rayon??)
 * Improve optimization of the threaded version

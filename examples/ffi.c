@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
     end = now();
     printf("Build compressed_random_map of %lld items: %0.3fs = %0.1f ns/item\n",
         (long long)hashmap_len, end-start, (end-start)*1e9/hashmap_len);
-    size_t ser_size = cmap_compressed_random_map_u64_u64_ser_size(map);
+    size_t ser_size = cmap_compressed_random_map_u64_u64_encode(map,NULL,0);
     printf("Size is %lld bytes = %0.1f bytes/item\n",
         (long long)ser_size, (double)ser_size/hashmap_len);
 
