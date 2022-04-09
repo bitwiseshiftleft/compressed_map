@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
     double end = now();
     size_t hashmap_len = cmap_hashmap_u64_u64_len(hash);
     assert(hashmap_len <= nitems);
-    assert(hashmap_len >= nitems * 0.99);
+    assert(hashmap_len >= nitems * 0.9);
     printf("Build hashmap of %lld / %lld items: %0.3fs = %0.1f ns/item\n",
         (long long)hashmap_len, (long long)nitems, end-start, (end-start)*1e9/nitems);
 

@@ -61,7 +61,59 @@ construct a `CompressedMap` from an empty map.)
  
 This compressed map implementation is most efficient for maps containing
 hundreds to hundred-millions of keys, but only a few values.
- 
+
+## Code example
+
+This toy example shows the compression that [`CompressedMap<u64,bool>`] provides
+compared to a serialized [`HashMap`](std::collections::HashMap).
+
+```
+// Import relevant libraries
+use rand::{Rng,thread_rng,distributions::{Bernoulli, Distribution}};
+use compressed_map::{
+    CompressedMap,BuildOptions,
+    serialized_size,STD_BINCODE_CONFIG
+};
+use std::collections::HashMap;
+
+// Set up the RNG
+let distribution = Bernoulli::new(0.05).unwrap();
+let mut rng = thread_rng();
+
+// Create a map with 100k items, about 95% "no" : 5% "yes"
+let nitems = 100000;
+let mut map = HashMap::new();
+for _ in 0..nitems {
+    map.insert(rng.gen::<u64>(),distribution.sample(&mut rng));
+}
+
+// Compress the map
+let cmap = CompressedMap::<'_,u64,bool>::build(&map,
+    &mut BuildOptions::default()).unwrap();
+
+// Query the compressed map: the answer is the same as for the hashmap
+// Also count the true proportion so we can compute the Shannon limit
+let mut nyes = 0;
+for (key,value) in &map {
+    assert_eq!(value,cmap.query(&key));
+    nyes += *value as u64;
+}
+let p = nyes as f64 / nitems as f64; 
+
+// How big is the map?
+let hash_sersize = serialized_size(&map,STD_BINCODE_CONFIG).unwrap();
+let sersize = serialized_size(&cmap,STD_BINCODE_CONFIG).unwrap();
+let shannon = nitems as f64 * -(p*p.log2() + (1.-p)*(1.-p).log2());
+println!("hashmap={} bytes, cmap={} bytes, ratio={:0.1}",
+    hash_sersize, sersize, hash_sersize as f64/sersize as f64);
+println!("Shannon limit for {:0.2}%={} bytes, overhead={:0.2}%",
+    p*100., (shannon/8.) as u64, (sersize as f64*8. / shannon - 1.) * 100.);
+    
+// Example output:
+// hashmap=900008 bytes, cmap=3952 bytes, ratio=227.7, 0.32 bits/key
+// Shannon limit for 5.03%=3596 bytes, overhead=9.87%
+```
+
 # Random compressed maps
 
 A lower-level building block is [`CompressedRandomMap<K,V>`].  These work much

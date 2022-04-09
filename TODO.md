@@ -1,8 +1,8 @@
 # Release items
 
 * C interface / dylib: deserialize, save/load file, map with bytes output
+* Test CFFI
 * Demo apps
-* Examples in doc
 
 # Post 0.2 quality items
 
