@@ -425,16 +425,26 @@ impl Distribution<Tile> for Standard {
 /** Methods supplied by vector accelerators */
 pub trait Accelerator where {
     type MulTable: Clone+Copy;
+    /// Determine whether this accelerator is available, e.g. whether the
+    /// current machine has AVX2 or NEON
     fn is_available() -> bool { false }
+    /// Permute the columns of a tile according to a permutation.
+    /// Unsafe because: may use intrinsics
     unsafe fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
         Scalar::mut_permute_columns(t,permutation)
     }
+    /// Precompute a table for accelerating multiplication by t.
+    /// Unsafe because: may use intrinsics
     unsafe fn compile_mul_table(_t:Tile) -> Self::MulTable {
         unimplemented!()
     }
+    /// Perform precomputed multiplication by the table used to construct t.
+    /// Unsafe because: may use intrinsics
     unsafe fn precomputed_mul(_table: &Self::MulTable, _tv: Tile) -> Tile {
         unimplemented!()
     }
+    /// Permute the columns of a tile according to a permutation, without mutating it.
+    /// Unsafe because: may use intrinsics
     unsafe fn permute_columns(mut t:Tile, permutation:&Permutation) -> Tile {
         Self::mut_permute_columns(&mut t,permutation);
         t
@@ -455,16 +465,20 @@ pub mod simd {
         use crate::tilematrix::tile::{Accelerator,Scalar};
         use super::*;
 
+        /// Run a function using intrinsics beloning to a particular acceleration package.
+        /// Unsafe because: may use intrinsics
         #[allow(dead_code)]
         #[inline(always)]
         pub unsafe fn with_accel<Accel:Accelerator>($($arg:$typ,)*) $(-> $rt)? $body
 
         #[allow(dead_code)]
         pub fn with_scalar($($arg:$typ,)*) $(-> $rt)? {
-            /* Scalar code isn't really unsafe, so encapsulate here */
+            // Safe because: scalar code isn't really unsafe, so encapsulate here
             unsafe { with_accel::<Scalar>($($arg,)*) }
         }
-            
+        
+        /// Run a function using AVX2 intrinsics
+        /// Unsafe because: uses AVX2 intrinsics; will catch SIGILL if AVX2 is unspported.
         #[allow(dead_code)]
         #[cfg(any(target_arch="x86_64",target_arch="x86"))]
         #[target_feature(enable = "avx2")]
@@ -472,14 +486,18 @@ pub mod simd {
             with_accel::<avx2::Avx2>($($arg,)*)
         }
 
+        /// Run a function using AArch64 NEON intrinsics
+        /// Safe (probably) because as far as I know, all AArch64 machines have NEON?
         #[allow(dead_code)]
         #[cfg(any(target_arch="aarch64"))]
         // it always has neon?
         // #[target_feature(enable = "neon")]
-        pub unsafe fn with_neon($($arg:$typ,)*) $(-> $rt)? {
-            with_accel::<neon::Neon>($($arg,)*)
+        pub fn with_neon($($arg:$typ,)*) $(-> $rt)? {
+            unsafe { with_accel::<neon::Neon>($($arg,)*) }
         }
 
+        /// Run a function using NEON intrinsics
+        /// Unsafe because: uses NEON intrinsics; will catch SIGILL if NEON is unspported.
         #[allow(dead_code)]
         #[cfg(any(target_arch="armv7"))]
         #[target_feature(enable = "neon")]
@@ -490,12 +508,19 @@ pub mod simd {
         #[allow(dead_code)]
         #[inline(always)]
         pub fn runtime($($arg:$typ,)*) $(-> $rt)? {
-            #[cfg(any(target_arch="aarch64",target_arch="armv7"))]
+            #[cfg(target_arch="armv7")]
             if neon::Neon::is_available() {
+                // Safe because: we checked that NEON is available
                 unsafe { return with_neon($($arg,)*); }
+            }
+            #[cfg(target_arch="aarch64")]
+            if neon::Neon::is_available() {
+                // Safe because: NEON is always available (?)
+                return with_neon($($arg,)*);
             }
             #[cfg(any(target_arch="x86_64",target_arch="x86"))]
             if avx2::Avx2::is_available() {
+                // Safe because: we checked that AVX2 is available
                 unsafe { return with_avx2($($arg,)*); }
             }
             with_scalar($($arg,)*)
@@ -625,6 +650,7 @@ impl Accelerator for Scalar {
     #[inline(always)]
     fn is_available() -> bool { true }
 
+    // Unsafe because: Actually safe, but the trait sig is unsafe
     #[inline(always)]
     unsafe fn mut_permute_columns(a:&mut Tile, permutation:&Permutation) {
         let mut ret = Tile::ZERO;
@@ -637,9 +663,11 @@ impl Accelerator for Scalar {
     }
 
     #[inline(always)]
+    // Unsafe because: Actually safe, but the trait sig is unsafe
     unsafe fn compile_mul_table(t: Tile) -> Self::MulTable { t }
 
     #[inline(always)]
+    // Unsafe because: Actually safe, but the trait sig is unsafe
     unsafe fn precomputed_mul(table: &Self::MulTable, t: Tile) -> Tile { *table*t }
 }
 
@@ -678,15 +706,17 @@ pub mod avx2 {
         #[inline(always)]
         fn is_available() -> bool { is_x86_feature_detected!("avx2") }
 
-        /** "Permute" columns of the tile according to "permutation".
-        * New column x = old column permutation(x).
-        * ("permutation" need not actually be a permutation)
-        * Any value greater than 0xF (in particular, PERMUTE_ZERO)
-        * will result in the column becoming zero.
-        * 
-        * PERF: adding a permute2 would improve performance for certain column
-        * ops on neon, but possibly not on AVX2
-        */
+        /// "Permute" columns of the tile according to "permutation".
+        ///
+        /// New column x = old column permutation(x).
+        /// ("permutation" need not actually be a permutation)
+        /// Any value greater than 0xF (in particular, PERMUTE_ZERO)
+        /// will result in the column becoming zero.
+        /// 
+        /// PERF: adding a permute2 would improve performance for certain column
+        /// ops on neon, but possibly not on AVX2
+        ///
+        /// Unsafe because: uses AVX2, will catch SIGILL if not supported.
         #[inline(always)]
         unsafe fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
             let addr = permutation as *const u8 as *const __m128i;
@@ -696,7 +726,9 @@ pub mod avx2 {
             _mm256_storeu_si256(&mut t.storage[0] as *mut u64 as *mut __m256i, ab);
         }
 
-        /** Precompute multiples of a tile in order to speed up vectorized multiplication */
+        /// Precompute multiples of a tile in order to speed up vectorized multiplication
+        ///
+        /// Unsafe because: uses AVX2, will catch SIGILL if not supported.
         #[inline(always)]
         unsafe fn compile_mul_table(t:Tile) -> MulTable {
             let mut abcd = _mm256_loadu_si256(&t.storage[0] as *const u64 as *const __m256i);
@@ -727,7 +759,9 @@ pub mod avx2 {
             MulTable { table : [ adlo, adhi, cblo, cbhi ] }
         }
 
-
+        /// Use precomputed table in order to speed up vectorized multiplication
+        ///
+        /// Unsafe because: uses AVX2, will catch SIGILL if not supported.
         #[inline(always)]
         unsafe fn precomputed_mul(table: &MulTable, tv: Tile) -> Tile {
             let mut ret = [0u64; STORAGE_PER];
@@ -777,15 +811,17 @@ pub mod neon {
         #[inline(always)]
         fn is_available() -> bool { is_arm_feature_detected("neon") }
 
-        /** "Permute" columns of the tile according to "permutation".
-        * New column x = old column permutation(x).
-        * ("permutation" need not actually be a permutation)
-        * Any value greater than 0xF (in particular, PERMUTE_ZERO)
-        * will result in the column becoming zero.
-        * 
-        * PERF: adding a permute2 would improve performance for certain column
-        * ops on neon, but possibly not on AVX2
-        */
+        /// "Permute" columns of the tile according to "permutation".
+        ///
+        /// New column x = old column permutation(x).
+        /// ("permutation" need not actually be a permutation)
+        /// Any value greater than 0xF (in particular, PERMUTE_ZERO)
+        /// will result in the column becoming zero.
+        /// 
+        /// PERF: adding a permute2 would improve performance for certain column
+        /// ops on neon, but possibly not on AVX2
+        ///
+        /// Unsafe because: uses NEON intrinsics (unsafe at least on Armv7, which may not have NEON)
         #[inline(always)]
         unsafe fn mut_permute_columns(t:&mut Tile, permutation:&Permutation) {
             let vperm = vld1q_u8(permutation as *const u8);
@@ -797,7 +833,9 @@ pub mod neon {
             vst1q_u64(&mut t.storage[2] as *mut u64, vreinterpretq_u64_u8(cd));
         }
 
-        /** Precompute multiples of a tile in order to speed up vectorized multiplication */
+        /// Precompute multiples of a tile in order to speed up vectorized multiplication
+        //
+        /// Unsafe because: uses NEON intrinsics (unsafe at least on Armv7, which may not have NEON)
         #[inline(always)]
         unsafe fn compile_mul_table(t:Tile) -> MulTable {
             let mut ab = vld1q_u64(&t.storage[0] as *const u64);
@@ -829,6 +867,9 @@ pub mod neon {
             MulTable { table : [ (low0,high0),(low1,high1),(low2,high2),(low3,high3) ] }
         }
 
+        /// Use precomputed table in order to speed up vectorized multiplication
+        ///
+        /// Unsafe because: uses NEON intrinsics (unsafe at least on Armv7, which may not have NEON)
         #[inline(always)]
         unsafe fn precomputed_mul(table: &MulTable, tv: Tile) -> Tile {
             let mut ret = [0u64; STORAGE_PER];

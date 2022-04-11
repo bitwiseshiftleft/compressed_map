@@ -1,7 +1,8 @@
 # Release items
 
-* C interface / dylib: deserialize, save/load file, map with bytes output
+* Complete the C interface / dylib: deserialize, save/load file, map with bytes output
 * Test CFFI
+* Test on Armv7 and x86
 * Demo apps
 
 # Post 0.2 quality items
@@ -25,7 +26,7 @@
 
 * Make production-quality (1.0).
 * no_std core for embedded systems
-* Test Armv7 and x86 support; add SSSE3 version?
+* Add SSSE3 version?  ARM SEV??
 * Better interface for tile matrices; release as its own crate?
 * Test on very large data sets (eg CompressedRandomMap with 1 billion entries; needs lots of memory to build)
 * Prove correctness; it may also give insights on optimal matrix shapes.
