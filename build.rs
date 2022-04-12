@@ -7,7 +7,7 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    let headers_enabled = env::var_os("CARGO_FEATURE_CFFI").is_some();
+    let headers_enabled = env::var_os("CARGO_FEATURE_HEADERS").is_some();
     if !headers_enabled { return (); }
     let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let package_name = env::var("CARGO_PKG_NAME").unwrap();
