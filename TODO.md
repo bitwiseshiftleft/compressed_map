@@ -1,7 +1,13 @@
-# Release items
+# C FFI items
 
 * Complete the C interface / dylib: deserialize, save/load file, map with bytes output
-* Test CFFI
+* Test compressed maps in CFFI
+* Test (de)serialization in CFFI
+* Test that CFFI doesn't leak memory
+* Rename the C FFI types?
+
+# Other v0.2 release items
+
 * Test on Armv7 and x86
 * Demo apps
 

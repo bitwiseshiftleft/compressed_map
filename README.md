@@ -14,6 +14,12 @@ This implementation is still research-grade.  Don't deploy it in production.
 In particular, it depends on `bincode` version 2.0.0-RC.1, which may have
 significant changes before release.
 
+The C FFI is currently incomplete, and I might change the type names
+to be namespaced and/or to be less ridiculous.  Let me know (via issues)
+if there's something you want added or changed in the C FFI.  Currently,
+it does not expose the full functionality of the Rust side, especially
+regarding build options.
+
 ## Static functions, aka CompressedMap
 
 The static function problem is to compress a map `M` of type `K -> V`.

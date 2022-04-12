@@ -7,7 +7,7 @@ description = "'Static functions': compressed maps with the keys removed"
 readme = "README.md"
 repository = "https://github.com/bitwiseshiftleft/compressed_map"
 categories = ["data-structures", "compression"]
-include = ["/src", "/benches", "LICENSE.txt", "build.rs"]
+include = ["/src", "/benches", "LICENSE.txt", "TODO.md", "README.md", "build.rs"]
 build = "build.rs" # for cbindgen
 
 [lib]
