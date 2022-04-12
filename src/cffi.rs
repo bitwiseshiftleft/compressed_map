@@ -5,6 +5,8 @@
  *
  * C foreign function interface.
  * All boilerplate. Would be nice if GPT3 / macros could write this :-/
+ *
+ * Unsafe functions here are unsafe because they take raw pointers from C.
  */
 
 use crate::{BuildOptions,CompressedRandomMap,ApproxSet,STD_BINCODE_CONFIG,CompressedMap,serialized_size};
@@ -335,9 +337,10 @@ pub unsafe extern fn cmap_hashset_bytes_free(ptr: *mut HashSet<Bytes>) {
 
 #[no_mangle]
 /// Build an ApproxSet.  Return NULL on failure
-pub unsafe extern fn cmap_approxset_bytes_build<'a>(ptr: NonNull<HashSet<Bytes>>)
+pub unsafe extern fn cmap_approxset_bytes_build<'a>(ptr: NonNull<HashSet<Bytes>>, bits_per_value: u8)
         -> *mut ApproxSet<'a, Bytes> {
     let mut options = BuildOptions::default();
+    options.bits_per_value = Some(bits_per_value);
     if let Some(aset) = ApproxSet::build(ptr.as_ref(),&mut options) {
         return Box::into_raw(Box::new(aset));
     }
@@ -415,9 +418,10 @@ pub unsafe extern fn cmap_hashset_u64_free(ptr: *mut HashSet<u64>) {
 
 #[no_mangle]
 /// Build an ApproxSet.  Return NULL on failure
-pub unsafe extern fn cmap_approxset_u64_build<'a>(ptr: NonNull<HashSet<u64>>)
+pub unsafe extern fn cmap_approxset_u64_build<'a>(ptr: NonNull<HashSet<u64>>, bits_per_value: u8)
         -> *mut ApproxSet<'a, u64> {
     let mut options = BuildOptions::default();
+    options.bits_per_value = Some(bits_per_value);
     if let Some(aset) = ApproxSet::build(ptr.as_ref(),&mut options) {
         return Box::into_raw(Box::new(aset));
     }

@@ -14,6 +14,7 @@
 # Performance
 
 * Reduce C dylib size?
+* Make a one-shot C vector to Rust map compression call.
 * Why is SipHasher so slow on Intel?
 * Multithread hashing even if we aren't multithreading bucketsort.  (Using Rayon??)
 * Improve optimization of the threaded version
