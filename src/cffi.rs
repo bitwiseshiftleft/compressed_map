@@ -72,7 +72,7 @@ pub unsafe extern fn cmap_hashmap_bytes_u64_get(ptr: NonNull<HashMap<Bytes,u64>>
 #[no_mangle]
 /// Free a HashMap
 pub unsafe extern fn cmap_hashmap_bytes_u64_free(ptr: *mut HashMap<Bytes,u64>) {
-    if !ptr.is_null() { Box::from_raw(ptr); }
+    if !ptr.is_null() { drop(Box::from_raw(ptr)); }
 }
 
 #[no_mangle]
@@ -112,7 +112,7 @@ pub unsafe extern fn cmap_compressed_map_bytes_u64_encode<'a>(
 #[no_mangle]
 /// Destroy and free a CompressedMap
 pub unsafe extern fn cmap_compressed_map_bytes_u64_free<'a>(ptr: *mut CompressedMap<'a,Bytes,u64>) {
-    if !ptr.is_null() { Box::from_raw(ptr); }
+    if !ptr.is_null() { drop(Box::from_raw(ptr)); }
 }
 
 #[no_mangle]
@@ -152,7 +152,7 @@ pub unsafe extern fn cmap_compressed_random_map_bytes_u64_encode<'a>(
 #[no_mangle]
 /// Destroy and free a CompressedRandomMap
 pub unsafe extern fn cmap_compressed_random_map_bytes_u64_free<'a>(ptr: *mut CompressedRandomMap<'a,Bytes,u64>) {
-    if !ptr.is_null() { Box::from_raw(ptr); }
+    if !ptr.is_null() { drop(Box::from_raw(ptr)); }
 }
 
 
@@ -208,7 +208,7 @@ pub unsafe extern fn cmap_hashmap_u64_u64_get(ptr: NonNull<HashMap<u64,u64>>,
 #[no_mangle]
 /// Free a HashMap
 pub unsafe extern fn cmap_hashmap_u64_u64_free(ptr: *mut HashMap<u64,u64>) {
-    if !ptr.is_null() { Box::from_raw(ptr); }
+    if !ptr.is_null() { drop(Box::from_raw(ptr)); }
 }
 
 #[no_mangle]
@@ -248,7 +248,7 @@ pub unsafe extern fn cmap_compressed_map_u64_u64_encode<'a>(
 #[no_mangle]
 /// Destroy and free a CompressedMap
 pub unsafe extern fn cmap_compressed_map_u64_u64_free<'a>(ptr: *mut CompressedMap<'a,u64,u64>) {
-    if !ptr.is_null() { Box::from_raw(ptr); }
+    if !ptr.is_null() { drop(Box::from_raw(ptr)); }
 }
 
 #[no_mangle]
@@ -288,7 +288,7 @@ pub unsafe extern fn cmap_compressed_random_map_u64_u64_query<'a>(
 #[no_mangle]
 /// Destroy and free a CompressedRandomMap
 pub unsafe extern fn cmap_compressed_random_map_u64_u64_free<'a>(ptr: *mut CompressedRandomMap<'a,u64,u64>) {
-    if !ptr.is_null() { Box::from_raw(ptr); }
+    if !ptr.is_null() { drop(Box::from_raw(ptr)); }
 }
 
 
@@ -332,7 +332,7 @@ pub unsafe extern fn cmap_hashset_bytes_contains(mut ptr: NonNull<HashSet<Bytes>
 #[no_mangle]
 /// Free a HashSet
 pub unsafe extern fn cmap_hashset_bytes_free(ptr: *mut HashSet<Bytes>) {
-    if !ptr.is_null() { Box::from_raw(ptr); }
+    if !ptr.is_null() { drop(Box::from_raw(ptr)); }
 }
 
 #[no_mangle]
@@ -373,7 +373,7 @@ pub unsafe extern fn cmap_approxset_bytes_encode<'a>(
 #[no_mangle]
 /// Destroy and free an ApproxSet
 pub unsafe extern fn cmap_approxset_bytes_free<'a>(ptr: *mut ApproxSet<'a,Bytes>) {
-    if !ptr.is_null() { Box::from_raw(ptr); }
+    if !ptr.is_null() { drop(Box::from_raw(ptr)); }
 }
 
 /****************************************************************************
@@ -413,7 +413,7 @@ pub unsafe extern fn cmap_hashset_u64_contains(mut ptr: NonNull<HashSet<u64>>, k
 #[no_mangle]
 /// Free a HashSet
 pub unsafe extern fn cmap_hashset_u64_free(ptr: *mut HashSet<u64>) {
-    if !ptr.is_null() { Box::from_raw(ptr); }
+    if !ptr.is_null() { drop(Box::from_raw(ptr)); }
 }
 
 #[no_mangle]
@@ -453,6 +453,6 @@ pub unsafe extern fn cmap_approxset_u64_encode<'a>(
 #[no_mangle]
 /// Destroy and free an ApproxSet
 pub unsafe extern fn cmap_approxset_u64_free<'a>(ptr: *mut ApproxSet<'a,u64>) {
-    if !ptr.is_null() { Box::from_raw(ptr); }
+    if !ptr.is_null() { drop(Box::from_raw(ptr)); }
 }
  
