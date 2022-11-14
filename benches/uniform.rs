@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use compressed_map::{CompressedRandomMap,BuildOptions};
+use compressed_map::{CompressedRandomMap,BuildOptions,serialized_size,STD_BINCODE_CONFIG};
 use rand::{Rng,SeedableRng};
 use rand::rngs::StdRng;
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ criterion_group!{
     targets = criterion_benchmark
 }
 fn criterion_benchmark(crit: &mut Criterion) {
-    let sizes = vec![1000usize,10000,100000,1000000];
+    let sizes = vec![100usize,500usize,1000usize,10000,100000,1000000];
     let nbits = 8;
     let mask = if nbits == 64 { !0 } else { (1u64 << nbits) - 1 };
     for size in sizes {
@@ -23,6 +23,13 @@ fn criterion_benchmark(crit: &mut Criterion) {
 
         // /* Bench hashmap insert because the C includes it in build */
         let mut map = HashMap::new();
+        
+        // Do it once outside the bencher
+        // in case the below benchmark is skipped
+        for i in 0..size {
+            map.insert(keys[i],values[i]);
+        }
+
         crit.bench_function(&format!("uniform hashmap {}",size),
             |crit| crit.iter(|| {
             map = HashMap::new();
@@ -35,6 +42,7 @@ fn criterion_benchmark(crit: &mut Criterion) {
         let mut umap = None;
         let mut total_tries = 0;
         let mut total_builds = 0;
+        let mut total_size = 0;
         let mut options = BuildOptions::default();
         options.key_gen = Some(seed[..16].try_into().unwrap());
         crit.bench_function(&format!("uniform build {}",size),
@@ -44,11 +52,13 @@ fn criterion_benchmark(crit: &mut Criterion) {
                 assert!(umap.is_some()); /* Assert success */
                 total_tries += options.try_num + 1;
                 total_builds += 1;
+                total_size += serialized_size(umap.as_ref().unwrap(),STD_BINCODE_CONFIG).unwrap();
             }));
 
         if let Some(umap_some) = umap {
-            println!("Building for size {} success rate {}%", size,
-                total_builds as f64 * 100. / total_tries as f64);
+            println!("Building for size {} success rate {}% mean byte size {}", size,
+                total_builds as f64 * 100. / total_tries as f64,
+                total_size / total_builds);
             /* Bench querying */
             let mut qi = 0;
             crit.bench_function(&format!("uniform query {}",size),
