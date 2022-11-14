@@ -60,7 +60,9 @@ fn floor_power_of_2(x:Locator) -> Locator {
  *   ResponseMap: locator interval -> V
  */
 fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
-    -> (Plan, HashMap<&'a V, usize>, Vec<(usize,Locator,Locator)>, ResponseMap<V>)
+    -> Option<
+        (Plan, HashMap<&'a V, usize>, Vec<(usize,Locator,Locator)>, ResponseMap<V>)
+    >
 {
     /* Deal with special cases */
     let nitems = counts.len();
@@ -73,7 +75,7 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
             interval_vec.push((*c,0,Locator::MAX));
             resp.push((0 as Locator,(*x).clone()));
         }
-        return (0,value_map,interval_vec,resp);
+        return Some((0,value_map,interval_vec,resp));
     }
 
     /* Count the weighted total number of items */
@@ -81,14 +83,39 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
     for v in counts.values() { total += v; }
     debug_assert!(total > 0);
 
-    let mut total_width = 0 as Locator;
-    let mut items = Vec::new();
-    for (k,v) in counts.iter() {
-        let count = *v as u128;
-        let ratio = ((count << Locator::BITS) as u128) / (total as u128);
-        let width = floor_power_of_2(ratio as Locator);
-        items.push((k,width,*v));
-        total_width = total_width.wrapping_add(width);
+    /* Assign an initial interval size, which is its count/total, as a
+     * 32-bit binary fraction, rounded down to the next power of 2.
+     *
+     * Because we always round down, the sum will always be in the interval
+     * [2^31, 2^32] and the following code depends on this.
+     *
+     * Except: the fraction "0" (indicating < 1/2^32, since all counts are
+     * actually nonzero) must round up to 1 instead.  In that case, the sum
+     * could in fact overflow.  To fix this, we can "fudge" by halving all
+     * nonzero interval sizes.
+     *
+     * TODO: test this fix.
+     */
+    let mut total_width;
+    let mut items;
+    let mut fudge = 0;
+    loop {
+        items = Vec::new();
+        total_width = 0u64;
+        for (k,v) in counts.iter() {
+            let count = *v as u128;
+            let ratio = (count << (Locator::BITS-fudge)) / (total as u128);
+            let width = floor_power_of_2(ratio as Locator);
+            items.push((k,width,*v));
+            total_width += width as u64;
+        }
+        if Locator::BITS >= 64 || total_width <= (1u64 << Locator::BITS) {
+            break;
+        }
+        fudge += 1;
+        if fudge > 16 {
+            return None;
+        }
     }
 
     /* Sort them into priority order by "fit".  This is used to expand them
@@ -105,7 +132,8 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
     items.sort_by(compare_fit);
 
     /* Extend the intervals to the next power of 2 in priority order */
-    let mut remaining_width = total_width.wrapping_neg();
+    /* 2u64 << bits-1 = 1u64<<bits, unless bits==64 in which case it's 0 (but without error) */
+    let mut remaining_width = (2u64 << (Locator::BITS-1)).wrapping_sub(total_width) as Locator;
     for i in 0..items.len() {
         if remaining_width == 0 { break; }
         let expand = min(remaining_width, items[i].1);
@@ -133,7 +161,7 @@ fn formulate_plan<'a, V:Ord+Clone+Hash>(counts: HashMap<&'a V,usize>)
     }
 
     /* Done */
-    (plan, value_map, interval_vec, resp)
+    Some((plan, value_map, interval_vec, resp))
 }
 
 /// Compressed static functions.
@@ -229,7 +257,7 @@ impl <'a,K:Hash,V,H:KeyedHasher128> CompressedMap<'a,K,V,H> {
             });
         }
 
-        let (plan, value_map, interval_vec, response_map) = formulate_plan(counts);
+        let (plan, value_map, interval_vec, response_map) = formulate_plan(counts)?;
         let nphases = plan.count_ones() as usize;
 
         /* Record which bits are to be determined in each phase */

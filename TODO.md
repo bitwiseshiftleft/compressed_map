@@ -8,14 +8,15 @@
 
 # Other v0.2 release items
 
-* Test on Armv7 and x86
+* Test on Armv7 and x86, RISC-V and some big-endian system
 * Demo apps
+* Optimize results for small maps?  Here storing the hash key and rounding up to one block (=32 bits) are costly.
 
 # Post 0.2 quality items
 
 * Distinguish between "out of memory", "can't create thread" etc, and "matrix is not invertible"
-* Deal with overflow cases with billions of items in nonuniform maps, where 0 rounds up to 1.
 * Enable mmap?
+* Allow other implementations such as binary fuse filters?
 
 # Performance
 
@@ -31,6 +32,7 @@
 
 # Longer term
 
+* Whitepaper
 * Make production-quality (1.0).
 * no_std core for embedded systems
 * Add SSSE3 version?  ARM SEV??
