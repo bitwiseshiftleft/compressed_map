@@ -11,6 +11,11 @@
 * Test on Armv7 and x86, RISC-V and some big-endian system
 * Demo apps
 * Optimize results for small maps?  Here storing the hash key and rounding up to one block (=32 bits) are costly.
+    * First possible approach: add linear constraints that certain bits of the last block must match (functions of) bits elsewhere.
+        * Then encode the other bits of the last block separately in packed form, separately.
+        * On decode, fill in the extra bits.
+    * Second possible approach: arrange that fewer entries end up in the last block, and then directly constrain some of its bits (eg to be zero).
+    * Third possible approach: make ribbon offsets in bytes (but still block-sized), and change the solver.
 
 # Post 0.2 quality items
 
