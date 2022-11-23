@@ -189,7 +189,7 @@ pub struct CompressedMap<'a,K,V,H=DefaultHasher> {
     response_map: ResponseMap<V>,
     salt: Vec<u8>,
     core: Vec<MapCore<'a,H>>,
-    _phantom: PhantomData<K>
+    _phantom: PhantomData<fn(K)>
 }
 
 impl <'a,K,V:PartialEq,H> PartialEq for CompressedMap<'a,K,V,H> {

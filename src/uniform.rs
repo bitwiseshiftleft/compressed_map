@@ -371,7 +371,7 @@ pub(crate) struct MapCore<'a,H=DefaultHasher> {
     pub(crate) blocks: Cow<'a, [u8]>,
 
     /** Placeholder */
-    pub(crate) _phantom: PhantomData<H>
+    pub(crate) _phantom: PhantomData<fn() -> H>
 }
 
 impl <'a,H> PartialEq for MapCore<'a,H> {
@@ -851,7 +851,7 @@ pub struct CompressedRandomMap<'a,K,V,H=DefaultHasher> {
     pub(crate) core: MapCore<'a,H>,
 
     /** Phantom to hold the types of K,V */
-    _phantom: PhantomData<(K,V,H)>
+    _phantom: PhantomData<fn(K) -> V>
 }
 impl <'a,K,V,H> PartialEq for CompressedRandomMap<'a,K,V,H> {
     fn eq(&self,other:&Self) -> bool { self.core == other.core }
